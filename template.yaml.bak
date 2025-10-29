@@ -1,0 +1,240 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Incident Replay Simulator SAM template provisioning S3 buckets, Glue catalog,
+  Athena workgroup, Lambda functions, and SNS topic for IAM CreateUser replay detection.
+
+Globals:
+  Function:
+    Runtime: python3.11
+    MemorySize: 256
+    Timeout: 60
+    Tracing: Active
+    Handler: handler.lambda_handler
+    Architectures:
+      - x86_64
+    Environment:
+      Variables:
+        IRS_REPLAY_BUCKET: !Ref ReplayBucket
+        IRS_RESULTS_BUCKET: !Ref ResultsBucket
+        IRS_GLUE_DATABASE: !Ref GlueDbName
+        IRS_ATHENA_WORKGROUP: !Ref AthenaWorkGroup
+        IRS_SNS_TOPIC_ARN: !Ref IrsNotificationsTopic
+
+Parameters:
+  ReplayBucket:
+    Type: String
+    Default: "cloudtrail-replay-bucket"
+    Description: Globally unique S3 bucket name for original/replay CloudTrail logs.
+  ResultsBucket:
+    Type: String
+    Default: "athena-results-bucket"
+    Description: Globally unique S3 bucket name for Athena output artifacts.
+  AthenaWorkGroup:
+    Type: String
+    Default: "irs_wg"
+    Description: Name of the Athena WorkGroup.
+  GlueDbName:
+    Type: String
+    Default: "irs_db"
+    Description: Name of the Glue Database.
+  NotificationEmail:
+    Type: String
+    Default: ""
+    Description: Optional email address for SNS notifications. Leave blank to disable.
+
+Conditions:
+  HasNotificationEmail: !Not [!Equals [!Ref NotificationEmail, ""]]
+
+Resources:
+  ReplayBucketResource: # Renamed from ReplayLogBucket
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref ReplayBucket
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  ResultsBucketResource: # Renamed from AthenaResultsBucket
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref ResultsBucket
+      VersioningConfiguration:
+        Status: Enabled
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      LifecycleConfiguration:
+        Rules:
+          - Id: AthenaResultsExpiration
+            Status: Enabled
+            ExpirationInDays: 30
+            Prefix: athena/results/
+
+  GlueDatabase: # Name updated to use parameter
+    Type: AWS::Glue::Database
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Sub "${GlueDbName}-${AWS::StackName}"
+        Description: Incident Replay Simulator Glue database.
+
+  AthenaWorkGroupResource: # Name updated to use parameter, OutputLocation updated
+    Type: AWS::Athena::WorkGroup
+    Properties:
+      Name: !Sub "${AthenaWorkGroup}-${AWS::StackName}"
+      Description: Dedicated workgroup for incident replay Athena queries.
+      RecursiveDeleteOption: false
+      State: ENABLED
+      WorkGroupConfiguration:
+        BytesScannedCutoffPerQuery: 10737418240
+        PublishCloudWatchMetricsEnabled: true
+        EnforceWorkGroupConfiguration: true
+        ResultConfiguration:
+          OutputLocation: !Sub s3://${ResultsBucket}/athena/results/
+    DependsOn:
+      - ResultsBucketResource
+
+  IrsNotificationsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "irs_notifications-${AWS::StackName}"
+      DisplayName: Incident Replay Simulator Notifications
+      Subscription:
+        - !If
+          - HasNotificationEmail
+          - Endpoint: !Ref NotificationEmail
+            Protocol: email
+          - !Ref AWS::NoValue
+
+  IngestReplayLogFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: ingest_replay_log
+      CodeUri: src/
+      Description: Seed sample CloudTrail IAM CreateUser logs into the replay bucket.
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:PutObject
+              Resource:
+                - !Sub arn:${AWS::Partition}:s3:::${ReplayBucket}/*
+        - AWSLambdaBasicExecutionRole
+      Handler: ingest_replay_log/handler.lambda_handler
+
+  ReplayOrchestratorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: replay_orchestrator
+      CodeUri: src/
+      Description: Submit Athena DDL/DML queries and persist results to S3.
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource:
+                - !Sub arn:${AWS::Partition}:s3:::${ResultsBucket}/*
+                - !Sub arn:${AWS::Partition}:s3:::${ReplayBucket}/*
+        - Statement:
+            - Sid: GlueAccess
+              Effect: Allow
+              Action:
+                - glue:GetDatabase
+                - glue:GetTable
+                - glue:CreateTable
+                - glue:UpdateTable
+              Resource:
+                - !Sub arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:database/${GlueDbName}
+                - !Sub arn:${AWS::Partition}:glue:${AWS::Region}:${AWS::AccountId}:catalog
+            - Sid: AthenaAccess
+              Effect: Allow
+              Action:
+                - athena:StartQueryExecution
+                - athena:GetQueryExecution
+                - athena:GetQueryResults
+                - athena:StopQueryExecution
+                - athena:GetWorkGroup
+              Resource:
+                - !Sub arn:${AWS::Partition}:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${AthenaWorkGroup}
+                - !Sub arn:${AWS::Partition}:athena:${AWS::Region}:${AWS::AccountId}:query-execution/*
+        - AWSLambdaBasicExecutionRole
+      Events:
+        RunDaily:
+          Type: Schedule
+          Properties:
+            Schedule: cron(0 3 * * ? *)
+      Handler: replay_orchestrator/handler.lambda_handler
+
+  DetectorAdapterStubFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: detector_adapter_stub
+      CodeUri: src/
+      Description: Simulated detector adapter that evaluates Athena results.
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource:
+                - !Sub arn:${AWS::Partition}:s3:::${ResultsBucket}/*
+        - AWSLambdaBasicExecutionRole
+      Handler: detector_adapter_stub/handler.lambda_handler
+
+  ReporterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: reporter
+      CodeUri: src/
+      Description: Aggregate detection metrics, generate reports, and publish notifications.
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource:
+                - !Sub arn:${AWS::Partition}:s3:::${ResultsBucket}/*
+        - Statement:
+            - Effect: Allow
+              Action:
+                - sns:Publish
+              Resource:
+                - !Ref IrsNotificationsTopic
+        - AWSLambdaBasicExecutionRole
+      Handler: reporter/handler.lambda_handler
+
+Outputs:
+  ReplayBucketNameOutput:
+    Description: Replay log bucket name.
+    Value: !Ref ReplayBucketResource
+  ResultsBucketNameOutput:
+    Description: Athena results bucket name.
+    Value: !Ref ResultsBucketResource
+  GlueDatabaseNameOutput:
+    Description: Glue database identifier.
+    Value: !Ref GlueDbName
+  AthenaWorkGroupNameOutput:
+    Description: Athena workgroup identifier.
+    Value: !Ref AthenaWorkGroupResource
+  NotificationsTopicArn:
+    Description: SNS topic ARN for reporting notifications.
+    Value: !Ref IrsNotificationsTopic

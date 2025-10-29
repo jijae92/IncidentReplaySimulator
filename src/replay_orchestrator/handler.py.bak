@@ -1,0 +1,73 @@
+from __future__ import annotations
+
+"""Lambda that orchestrates Athena queries for the replay simulator."""
+
+import json
+from pathlib import Path
+from typing import Any, Dict
+
+from aws_lambda_powertools import Logger, Tracer
+
+from src.common.athena import AthenaClient
+from src.common.config import IRSConfig, load_config
+from src.common.s3 import S3Client
+
+logger = Logger(service="replay_orchestrator")
+tracer = Tracer(service="replay_orchestrator")
+
+SQL_BASE = Path(__file__).resolve().parent.parent.parent / "sql"
+
+
+def _load_sql(relative_path: str) -> str:
+    """Load a SQL file from the sql directory."""
+    sql_path = SQL_BASE / relative_path
+    if not sql_path.exists():
+        raise FileNotFoundError(f"SQL file not found: {sql_path}")
+    return sql_path.read_text(encoding="utf-8")
+
+
+@tracer.capture_lambda_handler
+@logger.inject_lambda_context(clear_state=True)
+def lambda_handler(event: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    """
+    Execute Athena DDL/DML to materialize IAM CreateUser replay results.
+
+    TODO: Pass execution metadata downstream via EventBridge or Step Functions when integrated.
+    """
+    config: IRSConfig = load_config()
+    athena = AthenaClient(config=config)
+    s3_client = S3Client(config=config)
+
+    ddl_sql = _load_sql("create_cloudtrail_table.sql")
+    dml_sql = _load_sql("queries/createuser_sequence.sql")
+
+    logger.info("Executing Athena DDL for CloudTrail table")
+    athena.guarded_start_and_wait(query=ddl_sql, description="create-cloudtrail-table")
+
+    logger.info("Executing Athena DML for IAM CreateUser scenario")
+    dml_result = athena.guarded_start_and_wait(query=dml_sql, description="iam-createuser-detection")
+
+    metadata_key = f"athena/results/{dml_result.query_execution_id}/metadata.json"
+    metadata = {
+        "query_execution_id": dml_result.query_execution_id,
+        "output_location": dml_result.output_location,
+    }
+    s3_client.put_bytes(
+        config.results_bucket,
+        metadata_key,
+        json.dumps(metadata, indent=2).encode("utf-8"),
+        content_type="application/json",
+    )
+
+    logger.info(
+        "Stored Athena metadata",
+        extra={"bucket": config.results_bucket, "key": metadata_key},
+    )
+
+    return {
+        "statusCode": 200,
+        "body": {
+            "athena_execution_id": dml_result.query_execution_id,
+            "metadata_key": metadata_key,
+        },
+    }

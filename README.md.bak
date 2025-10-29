@@ -1,0 +1,73 @@
+# Incident Replay Simulator (IRS)
+
+## Goal · Deliverables · Scope
+- Goal: Reproduce a single abnormal IAM CreateUser scenario from CloudTrail data, detect it, and report detection accuracy.
+- Deliverables: Python 3.11 AWS SAM app with Lambda handlers under `src/*`, shared utilities in `src/common`, Athena SQL in `sql/*`, infra template `template.yaml`, pytest suites in `tests/*`, supporting `requirements.txt` and `samconfig.toml`.
+- Scope: Single IAM CreateUser replay only; no external schema changes beyond declared AWS resources; never commit secrets or destructive tooling.
+
+## Runtime · Dependencies · Paths
+- Runtime: Python 3.11 on Linux/WSL with POSIX paths (`/`); SAM CLI ≥ 1.120.
+- Dependencies: Locked in `requirements.txt`; local development uses virtualenv/venv; Lambda layers not yet defined.
+- Security: load secrets via `.env`/secret manager; mask tokens/keys in logs; 10s timeout+backoff; least privilege.
+- Quality: type hints+docstrings, test coverage ≥80%, use CLI exit codes, mock external I/O.
+- File policy: check before create, `.bak` before modify, no deletes unless explicitly requested.
+- CLI: support `--dry-run/--verbose/--json`; success is one line; errors include cause + next steps in 1–2 lines.
+- Forbidden: secret exposure, fake API citations, destructive changes. Beware JSON comments, infinite retries, mixed path styles.
+
+## Project Layout
+```
+.
+├── README.md
+├── template.yaml
+├── samconfig.toml
+├── requirements.txt
+├── src/
+│   ├── common/
+│   │   ├── athena.py
+│   │   ├── config.py
+│   │   ├── schemas.py
+│   │   ├── sns.py
+│   │   └── s3.py
+│   ├── detector_adapter_stub/
+│   │   └── handler.py
+│   ├── ingest_replay_log/
+│   │   └── handler.py
+│   ├── replay_orchestrator/
+│   │   └── handler.py
+│   └── reporter/
+│       └── handler.py
+├── sql/
+│   ├── create_cloudtrail_table.sql
+│   └── queries/
+│       └── createuser_sequence.sql
+├── tests/
+│   ├── test_athena_flow.py
+│   ├── test_ingest_paths.py
+│   └── test_report_metrics.py
+└── artifacts/
+    └── .gitkeep
+```
+
+## Run · Test · Deploy
+- Run (local SAM emulation): `sam local invoke ingestReplayLog --event events/create_user.json`
+- Test: `pytest -q --maxfail=1 --disable-warnings`
+- Package/Deploy: `sam build && sam deploy --config-file samconfig.toml`
+- Docker (optional): `docker build -t incident-replay-sim . && docker run --rm incident-replay-sim`
+- Serverless: `sam build && sam deploy --guided`
+
+## Environment Configuration
+- Configure environment variables through `.env` or AWS Secrets Manager; use `src/common/config.py` helpers to load.
+- Required values include bucket names, Athena workgroup, Glue database, and SNS topic ARN (see `template.yaml` outputs).
+- QuickSight integration is manual; point datasets to CSV exports in `athena-results-bucket`.
+
+## Workflow Overview
+1. `ingest_replay_log` seeds sample CloudTrail IAM CreateUser events into `cloudtrail-replay-bucket` using CloudTrail-compatible keys.
+2. `replay_orchestrator` triggers Athena DDL/DML stored in `sql/`, polls for completion via `irs_wg`, and persists results to `athena-results-bucket`.
+3. `detector_adapter_stub` reads Athena output and simulates a detection engine.
+4. `reporter` aggregates detections vs. ground truth, emits metrics, publishes to `irs_notifications`, and writes CSV/JSON summaries.
+
+## Next Steps
+- Populate `.env.example` if secrets or additional configuration are introduced.
+- Replace detector stub with real engine integration when ready.
+- Expand replay catalogue beyond CreateUser scenario using the same module structure.
+
