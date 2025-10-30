@@ -1,0 +1,17 @@
+version = 0.1
+
+[default.deploy.parameters]
+stack_name = "incident-replay-simulator"
+capabilities = ["CAPABILITY_IAM", "CAPABILITY_NAMED_IAM", "CAPABILITY_AUTO_EXPAND"]
+resolve_s3 = true
+confirm_changeset = false
+disable_rollback = false
+
+[default.deploy.parameters.parameter_overrides]
+UseExistingResources = "true"
+ReplayBucketName = "cloudtrail-replay-bucket-897722691159-ap-northeast-2"
+ResultsBucketName = "athena-results-bucket-897722691159-ap-northeast-2"
+NotificationEmail = "you@example.com"
+
+[default.global.parameters]
+region = "ap-northeast-2"
