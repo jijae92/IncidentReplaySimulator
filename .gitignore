@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+.Python
+env/
+.venv/
+.venv311/
+
+# IDEs
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+.env
+
+# AWS SAM
+.aws-sam/
+.aws-sam/build/
+.aws-sam/cache/
+.aws-sam/deps/
+
+# Testing
+.coverage
+.mypy_cache/
+.pytest_cache/
+
+# Logs and other generated files
+*.log
+*.tmp
+*.bak
+OUT/
+artifacts/
+events/
