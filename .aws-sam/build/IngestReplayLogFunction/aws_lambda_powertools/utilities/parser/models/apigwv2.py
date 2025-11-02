@@ -1,10 +1,10 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Literal, Optional, Type, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from pydantic.networks import IPvAnyNetwork
 
-from aws_lambda_powertools.utilities.parser.types import Literal
+from aws_lambda_powertools.utilities.parser.functions import _validate_source_ip
 
 
 class RequestContextV2AuthorizerIamCognito(BaseModel):
@@ -38,8 +38,13 @@ class RequestContextV2Http(BaseModel):
     method: Literal["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
     path: str
     protocol: str
-    sourceIp: IPvAnyNetwork
+    sourceIp: Union[IPvAnyNetwork, str]
     userAgent: str
+
+    @field_validator("sourceIp", mode="before")
+    @classmethod
+    def _validate_source_ip(cls, value):
+        return _validate_source_ip(value=value)
 
 
 class RequestContextV2(BaseModel):
@@ -68,4 +73,10 @@ class APIGatewayProxyEventV2Model(BaseModel):
     stageVariables: Optional[Dict[str, str]] = None
     requestContext: RequestContextV2
     body: Optional[Union[str, Type[BaseModel]]] = None
-    isBase64Encoded: bool
+    isBase64Encoded: Optional[bool] = None
+
+
+class ApiGatewayAuthorizerRequestV2(APIGatewayProxyEventV2Model):
+    type: Literal["REQUEST"]
+    routeArn: str
+    identitySource: Optional[List[str]] = None

@@ -1,18 +1,22 @@
 {
   "ReplayOrchestratorFunction": {
-    "IRS_RESULTS_BUCKET": "replay-897722691159-ap-northeast-2-results",
-    "IRS_REPLAY_BUCKET": "replay-897722691159-ap-northeast-2-replay",
-    "IRS_GLUE_DATABASE": "irs_db",
-    "IRS_ATHENA_WORKGROUP": "irs_wg-sam-app",
-    "IRS_SNS_TOPIC_ARN": "arn:aws:sns:ap-northeast-2:897722691159:irs_notifications-sam-app",
-    "AWS_REGION": "ap-northeast-2"
+    "ATHENA_RESULTS_BUCKET": "replay-897722691159-ap-northeast-2-results",
+    "BUCKET_REPLAY": "replay-897722691159-ap-northeast-2-replay",
+    "GLUE_DATABASE_NAME": "irs_db",
+    "ATHENA_WORK_GROUP_NAME": "irs_wg-sam-app",
+    "NOTIFICATION_SNS_TOPIC_ARN": "arn:aws:sns:ap-northeast-2:897722691159:irs_notifications-sam-app",
+    "AWS_REGION": "ap-northeast-2",
+    "Variables": {
+      "RESULTS_BUCKET": "athena-results-bucket-897722691159-ap-northeast-2",
+      "ATHENA_OUTPUT_PREFIX": "athena/results/",
+      "REPLAY_BUCKET": "cloudtrail-replay-bucket-897722691159-ap-northeast-2",
+      "ATHENA_WORKGROUP": "irswg-897722691159-ap-northeast-2",
+      "GLUE_DATABASE_NAME": "irsdb-897722691159-ap-northeast-2",
+      "NOTIFICATION_SNS_TOPIC_ARN": "arn:aws:sns:ap-northeast-2:897722691159:irs-notifications-topic"
+    }
   },
   "IngestReplayLogFunction": {
-    "IRS_REPLAY_BUCKET": "replay-897722691159-ap-northeast-2-replay",
-    "IRS_RESULTS_BUCKET": "replay-897722691159-ap-northeast-2-results",
-    "IRS_GLUE_DATABASE": "irs_db",
-    "IRS_ATHENA_WORKGROUP": "irs_wg-sam-app",
-    "IRS_SNS_TOPIC_ARN": "arn:aws:sns:ap-northeast-2:897722691159:irs_notifications-sam-app",
+    "BUCKET_REPLAY": "replay-897722691159-ap-northeast-2-replay",
     "AWS_REGION": "ap-northeast-2"
   }
 }

@@ -1,10 +1,10 @@
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Type, Union
+from typing import Any, Dict, List, Literal, Optional, Type, Union
 
-from pydantic import BaseModel, root_validator
+from pydantic import BaseModel, field_validator, model_validator
 from pydantic.networks import IPvAnyNetwork
 
-from aws_lambda_powertools.utilities.parser.types import Literal
+from aws_lambda_powertools.utilities.parser.functions import _validate_source_ip
 
 
 class ApiGatewayUserCertValidity(BaseModel):
@@ -33,11 +33,16 @@ class APIGatewayEventIdentity(BaseModel):
     principalOrgId: Optional[str] = None
     # see #1562, temp workaround until API Gateway fixes it the Test button payload
     # removing it will not be considered a regression in the future
-    sourceIp: Union[IPvAnyNetwork, Literal["test-invoke-source-ip"]]
+    sourceIp: Union[IPvAnyNetwork, str]
     user: Optional[str] = None
     userAgent: Optional[str] = None
     userArn: Optional[str] = None
     clientCert: Optional[ApiGatewayUserCert] = None
+
+    @field_validator("sourceIp", mode="before")
+    @classmethod
+    def _validate_source_ip(cls, value):
+        return _validate_source_ip(value=value)
 
 
 class APIGatewayEventAuthorizer(BaseModel):
@@ -70,7 +75,7 @@ class APIGatewayEventRequestContext(BaseModel):
     routeKey: Optional[str] = None
     operationName: Optional[str] = None
 
-    @root_validator(allow_reuse=True, skip_on_failure=True)
+    @model_validator(mode="before")
     def check_message_id(cls, values):
         message_id, event_type = values.get("messageId"), values.get("eventType")
         if message_id is not None and event_type != "MESSAGE":
@@ -90,5 +95,16 @@ class APIGatewayProxyEventModel(BaseModel):
     requestContext: APIGatewayEventRequestContext
     pathParameters: Optional[Dict[str, str]] = None
     stageVariables: Optional[Dict[str, str]] = None
-    isBase64Encoded: bool
+    isBase64Encoded: Optional[bool] = None
     body: Optional[Union[str, Type[BaseModel]]] = None
+
+
+class ApiGatewayAuthorizerToken(BaseModel):
+    type: Literal["TOKEN"]
+    methodArn: str
+    authorizationToken: str
+
+
+class ApiGatewayAuthorizerRequest(APIGatewayProxyEventModel):
+    type: Literal["REQUEST"]
+    methodArn: str

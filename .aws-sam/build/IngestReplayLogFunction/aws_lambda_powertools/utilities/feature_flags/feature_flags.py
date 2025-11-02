@@ -1,21 +1,55 @@
-import logging
-from typing import Any, Dict, List, Optional, Union, cast
+from __future__ import annotations
 
-from ... import Logger
-from ...shared.types import JSONType
-from . import schema
-from .base import StoreProvider
-from .comparators import (
+import logging
+from typing import TYPE_CHECKING, Any, cast
+
+from aws_lambda_powertools.utilities.feature_flags import schema
+from aws_lambda_powertools.utilities.feature_flags.comparators import (
+    compare_all_in_list,
+    compare_any_in_list,
     compare_datetime_range,
     compare_days_of_week,
     compare_modulo_range,
+    compare_none_in_list,
     compare_time_range,
 )
-from .exceptions import ConfigurationStoreError
+from aws_lambda_powertools.utilities.feature_flags.exceptions import ConfigurationStoreError
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from aws_lambda_powertools.logging import Logger
+    from aws_lambda_powertools.utilities.feature_flags.base import StoreProvider
+    from aws_lambda_powertools.utilities.feature_flags.types import JSONType, P, T
+
+
+RULE_ACTION_MAPPING = {
+    schema.RuleAction.EQUALS.value: lambda a, b: a == b,
+    schema.RuleAction.NOT_EQUALS.value: lambda a, b: a != b,
+    schema.RuleAction.KEY_GREATER_THAN_VALUE.value: lambda a, b: a > b,
+    schema.RuleAction.KEY_GREATER_THAN_OR_EQUAL_VALUE.value: lambda a, b: a >= b,
+    schema.RuleAction.KEY_LESS_THAN_VALUE.value: lambda a, b: a < b,
+    schema.RuleAction.KEY_LESS_THAN_OR_EQUAL_VALUE.value: lambda a, b: a <= b,
+    schema.RuleAction.STARTSWITH.value: lambda a, b: a.startswith(b),
+    schema.RuleAction.ENDSWITH.value: lambda a, b: a.endswith(b),
+    schema.RuleAction.IN.value: lambda a, b: a in b,
+    schema.RuleAction.NOT_IN.value: lambda a, b: a not in b,
+    schema.RuleAction.KEY_IN_VALUE.value: lambda a, b: a in b,
+    schema.RuleAction.KEY_NOT_IN_VALUE.value: lambda a, b: a not in b,
+    schema.RuleAction.VALUE_IN_KEY.value: lambda a, b: b in a,
+    schema.RuleAction.VALUE_NOT_IN_KEY.value: lambda a, b: b not in a,
+    schema.RuleAction.ALL_IN_VALUE.value: lambda a, b: compare_all_in_list(a, b),
+    schema.RuleAction.ANY_IN_VALUE.value: lambda a, b: compare_any_in_list(a, b),
+    schema.RuleAction.NONE_IN_VALUE.value: lambda a, b: compare_none_in_list(a, b),
+    schema.RuleAction.SCHEDULE_BETWEEN_TIME_RANGE.value: lambda a, b: compare_time_range(a, b),
+    schema.RuleAction.SCHEDULE_BETWEEN_DATETIME_RANGE.value: lambda a, b: compare_datetime_range(a, b),
+    schema.RuleAction.SCHEDULE_BETWEEN_DAYS_OF_WEEK.value: lambda a, b: compare_days_of_week(a, b),
+    schema.RuleAction.MODULO_RANGE.value: lambda a, b: compare_modulo_range(a, b),
+}
 
 
 class FeatureFlags:
-    def __init__(self, store: StoreProvider, logger: Optional[Union[logging.Logger, Logger]] = None):
+    def __init__(self, store: StoreProvider, logger: logging.Logger | Logger | None = None):
         """Evaluates whether feature flags should be enabled based on a given context.
 
         It uses the provided store to fetch feature flag rules before evaluating them.
@@ -46,46 +80,32 @@ class FeatureFlags:
         """
         self.store = store
         self.logger = logger or logging.getLogger(__name__)
+        self._exception_handlers: dict[Exception, Callable] = {}
 
     def _match_by_action(self, action: str, condition_value: Any, context_value: Any) -> bool:
-        mapping_by_action = {
-            schema.RuleAction.EQUALS.value: lambda a, b: a == b,
-            schema.RuleAction.NOT_EQUALS.value: lambda a, b: a != b,
-            schema.RuleAction.KEY_GREATER_THAN_VALUE.value: lambda a, b: a > b,
-            schema.RuleAction.KEY_GREATER_THAN_OR_EQUAL_VALUE.value: lambda a, b: a >= b,
-            schema.RuleAction.KEY_LESS_THAN_VALUE.value: lambda a, b: a < b,
-            schema.RuleAction.KEY_LESS_THAN_OR_EQUAL_VALUE.value: lambda a, b: a <= b,
-            schema.RuleAction.STARTSWITH.value: lambda a, b: a.startswith(b),
-            schema.RuleAction.ENDSWITH.value: lambda a, b: a.endswith(b),
-            schema.RuleAction.IN.value: lambda a, b: a in b,
-            schema.RuleAction.NOT_IN.value: lambda a, b: a not in b,
-            schema.RuleAction.KEY_IN_VALUE.value: lambda a, b: a in b,
-            schema.RuleAction.KEY_NOT_IN_VALUE.value: lambda a, b: a not in b,
-            schema.RuleAction.VALUE_IN_KEY.value: lambda a, b: b in a,
-            schema.RuleAction.VALUE_NOT_IN_KEY.value: lambda a, b: b not in a,
-            schema.RuleAction.SCHEDULE_BETWEEN_TIME_RANGE.value: lambda a, b: compare_time_range(a, b),
-            schema.RuleAction.SCHEDULE_BETWEEN_DATETIME_RANGE.value: lambda a, b: compare_datetime_range(a, b),
-            schema.RuleAction.SCHEDULE_BETWEEN_DAYS_OF_WEEK.value: lambda a, b: compare_days_of_week(a, b),
-            schema.RuleAction.MODULO_RANGE.value: lambda a, b: compare_modulo_range(a, b),
-        }
-
         try:
-            func = mapping_by_action.get(action, lambda a, b: False)
+            func = RULE_ACTION_MAPPING.get(action, lambda a, b: False)
             return func(context_value, condition_value)
         except Exception as exc:
             self.logger.debug(f"caught exception while matching action: action={action}, exception={str(exc)}")
+
+            handler = self._lookup_exception_handler(exc)
+            if handler:
+                self.logger.debug("Exception handler found! Delegating response.")
+                return handler(exc)
+
             return False
 
     def _evaluate_conditions(
         self,
         rule_name: str,
         feature_name: str,
-        rule: Dict[str, Any],
-        context: Dict[str, Any],
+        rule: dict[str, Any],
+        context: dict[str, Any],
     ) -> bool:
         """Evaluates whether context matches conditions, return False otherwise"""
         rule_match_value = rule.get(schema.RULE_MATCH_VALUE)
-        conditions = cast(List[Dict], rule.get(schema.CONDITIONS_KEY))
+        conditions = cast(list[dict], rule.get(schema.CONDITIONS_KEY))
 
         if not conditions:
             self.logger.debug(
@@ -121,9 +141,9 @@ class FeatureFlags:
         self,
         *,
         feature_name: str,
-        context: Dict[str, Any],
+        context: dict[str, Any],
         feat_default: Any,
-        rules: Dict[str, Any],
+        rules: dict[str, Any],
         boolean_feature: bool,
     ) -> bool:
         """Evaluates whether context matches rules and conditions, otherwise return feature default"""
@@ -144,7 +164,7 @@ class FeatureFlags:
         )
         return feat_default
 
-    def get_configuration(self) -> Dict:
+    def get_configuration(self) -> dict:
         """Get validated feature flag schema from configured store.
 
         Largely used to aid testing, since it's called by `evaluate` and `get_enabled_features` methods.
@@ -158,10 +178,11 @@ class FeatureFlags:
 
         Returns
         ------
-        Dict[str, Dict]
+        dict[str, dict]
             parsed JSON dictionary
 
-            **Example**
+        Example
+        -------
 
         ```python
         {
@@ -188,13 +209,13 @@ class FeatureFlags:
         """
         # parse result conf as JSON, keep in cache for max age defined in store
         self.logger.debug(f"Fetching schema from registered store, store={self.store}")
-        config: Dict = self.store.get_configuration()
+        config: dict = self.store.get_configuration()
         validator = schema.SchemaValidator(schema=config, logger=self.logger)
         validator.validate()
 
         return config
 
-    def evaluate(self, *, name: str, context: Optional[Dict[str, Any]] = None, default: JSONType) -> JSONType:
+    def evaluate(self, *, name: str, context: dict[str, Any] | None = None, default: JSONType) -> JSONType:
         """Evaluate whether a feature flag should be enabled according to stored schema and input context
 
         **Logic when evaluating a feature flag**
@@ -203,11 +224,27 @@ class FeatureFlags:
         2. Feature exists but has either no rules or no match, return feature default value
         3. Feature doesn't exist in stored schema, encountered an error when fetching -> return default value provided
 
+        ┌────────────────────────┐      ┌────────────────────────┐       ┌────────────────────────┐
+        │     Feature flags      │──────▶   Get Configuration    ├───────▶     Evaluate rules     │
+        └────────────────────────┘      │                        │       │                        │
+                                        │┌──────────────────────┐│       │┌──────────────────────┐│
+                                        ││     Fetch schema     ││       ││      Match rule      ││
+                                        │└───────────┬──────────┘│       │└───────────┬──────────┘│
+                                        │            │           │       │            │           │
+                                        │┌───────────▼──────────┐│       │┌───────────▼──────────┐│
+                                        ││     Cache schema     ││       ││   Match condition    ││
+                                        │└───────────┬──────────┘│       │└───────────┬──────────┘│
+                                        │            │           │       │            │           │
+                                        │┌───────────▼──────────┐│       │┌───────────▼──────────┐│
+                                        ││   Validate schema    ││       ││     Match action     ││
+                                        │└──────────────────────┘│       │└──────────────────────┘│
+                                        └────────────────────────┘       └────────────────────────┘
+
         Parameters
         ----------
         name: str
             feature name to evaluate
-        context: Optional[Dict[str, Any]]
+        context: dict[str, Any] | None
             Attributes that should be evaluated against the stored schema.
 
             for example: `{"tenant_id": "X", "username": "Y", "region": "Z"}`
@@ -215,6 +252,31 @@ class FeatureFlags:
             default value if feature flag doesn't exist in the schema,
             or there has been an error when fetching the configuration from the store
             Can be boolean or any JSON values for non-boolean features.
+
+
+        Example
+        --------
+
+        ```python
+        from aws_lambda_powertools.utilities.feature_flags import AppConfigStore, FeatureFlags
+        from aws_lambda_powertools.utilities.typing import LambdaContext
+
+        app_config = AppConfigStore(environment="dev", application="product-catalogue", name="features")
+
+        feature_flags = FeatureFlags(store=app_config)
+
+
+        def lambda_handler(event: dict, context: LambdaContext):
+            # Get customer's tier from incoming request
+            ctx = {"tier": event.get("tier", "standard")}
+
+            # Evaluate whether customer's tier has access to premium features
+            # based on `has_premium_features` rules
+            has_premium_features: bool = feature_flags.evaluate(name="premium_features", context=ctx, default=False)
+            if has_premium_features:
+                # enable premium features
+                ...
+        ```
 
         Returns
         ------
@@ -245,7 +307,7 @@ class FeatureFlags:
         # Maintenance: Revisit before going GA. We might to simplify customers on-boarding by not requiring it
         # for non-boolean flags. It'll need minor implementation changes, docs changes, and maybe refactor
         # get_enabled_features. We can minimize breaking change, despite Beta label, by having a new
-        # method `get_matching_features` returning Dict[feature_name, feature_value]
+        # method `get_matching_features` returning dict[feature_name, feature_value]
         boolean_feature = feature.get(
             schema.FEATURE_DEFAULT_VAL_TYPE_KEY,
             True,
@@ -269,22 +331,23 @@ class FeatureFlags:
             boolean_feature=boolean_feature,
         )
 
-    def get_enabled_features(self, *, context: Optional[Dict[str, Any]] = None) -> List[str]:
+    def get_enabled_features(self, *, context: dict[str, Any] | None = None) -> list[str]:
         """Get all enabled feature flags while also taking into account context
         (when a feature has defined rules)
 
         Parameters
         ----------
-        context: Optional[Dict[str, Any]]
+        context: dict[str, Any] | None
             dict of attributes that you would like to match the rules
             against, can be `{'tenant_id: 'X', 'username':' 'Y', 'region': 'Z'}` etc.
 
         Returns
         ----------
-        List[str]
+        list[str]
             list of all feature names that either matches context or have True as default
 
-            **Example**
+        Example
+        -------
 
         ```python
         ["premium_features", "my_feature_two", "always_true_feature"]
@@ -298,10 +361,10 @@ class FeatureFlags:
         if context is None:
             context = {}
 
-        features_enabled: List[str] = []
+        features_enabled: list[str] = []
 
         try:
-            features: Dict[str, Any] = self.get_configuration()
+            features: dict[str, Any] = self.get_configuration()
         except ConfigurationStoreError as err:
             self.logger.debug(f"Failed to fetch feature flags from store, returning empty list, reason={err}")
             return features_enabled
@@ -329,3 +392,45 @@ class FeatureFlags:
                 features_enabled.append(name)
 
         return features_enabled
+
+    def validation_exception_handler(self, exc_class: Exception | list[Exception]):
+        """Registers function to handle unexpected validation exceptions when evaluating flags.
+
+        It does not override the function of a default flag value in case of network and IAM permissions.
+        For example, you won't be able to catch ConfigurationStoreError exception.
+
+        Parameters
+        ----------
+        exc_class : Exception | list[Exception]
+            One or more exceptions to catch
+
+        Example
+        -------
+
+        ```python
+        feature_flags = FeatureFlags(store=app_config)
+
+        @feature_flags.validation_exception_handler(Exception)  # any exception
+        def catch_exception(exc):
+            raise TypeError("re-raised") from exc
+        ```
+        """
+
+        def register_exception_handler(func: Callable[P, T]) -> Callable[P, T]:
+            if isinstance(exc_class, list):
+                for exp in exc_class:
+                    self._exception_handlers[exp] = func
+            else:
+                self._exception_handlers[exc_class] = func
+
+            return func
+
+        return register_exception_handler
+
+    def _lookup_exception_handler(self, exc: BaseException) -> Callable | None:
+        # Use "Method Resolution Order" to allow for matching against a base class
+        # of an exception
+        for cls in type(exc).__mro__:
+            if cls in self._exception_handlers:
+                return self._exception_handlers[cls]  # type: ignore[index] # index is correct
+        return None

@@ -1,4 +1,6 @@
-from typing import Dict, List, Optional
+from __future__ import annotations
+
+from typing import Any
 
 from aws_lambda_powertools.shared.headers_serializer import (
     BaseHeadersSerializer,
@@ -7,6 +9,7 @@ from aws_lambda_powertools.shared.headers_serializer import (
 )
 from aws_lambda_powertools.utilities.data_classes.common import (
     BaseProxyEvent,
+    CaseInsensitiveDict,
     DictWrapper,
 )
 
@@ -15,7 +18,7 @@ class ALBEventRequestContext(DictWrapper):
     @property
     def elb_target_group_arn(self) -> str:
         """Target group arn for your Lambda function"""
-        return self["requestContext"]["elb"]["targetGroupArn"]
+        return self["elb"]["targetGroupArn"]
 
 
 class ALBEvent(BaseProxyEvent):
@@ -29,15 +32,19 @@ class ALBEvent(BaseProxyEvent):
 
     @property
     def request_context(self) -> ALBEventRequestContext:
-        return ALBEventRequestContext(self._data)
+        return ALBEventRequestContext(self["requestContext"])
 
     @property
-    def multi_value_query_string_parameters(self) -> Optional[Dict[str, List[str]]]:
-        return self.get("multiValueQueryStringParameters")
+    def resolved_query_string_parameters(self) -> dict[str, list[str]]:
+        return self.multi_value_query_string_parameters or super().resolved_query_string_parameters
 
     @property
-    def multi_value_headers(self) -> Optional[Dict[str, List[str]]]:
-        return self.get("multiValueHeaders")
+    def multi_value_headers(self) -> dict[str, list[str]]:
+        return CaseInsensitiveDict(self.get("multiValueHeaders"))
+
+    @property
+    def resolved_headers_field(self) -> dict[str, Any]:
+        return self.multi_value_headers or self.headers
 
     def header_serializer(self) -> BaseHeadersSerializer:
         # When using the ALB integration, the `multiValueHeaders` feature can be disabled (default) or enabled.

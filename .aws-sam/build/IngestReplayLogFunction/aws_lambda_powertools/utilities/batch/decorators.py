@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, Awaitable, Callable, Dict, List
+import warnings
+from typing import TYPE_CHECKING, Any
+
+from typing_extensions import deprecated
 
 from aws_lambda_powertools.middleware_factory import lambda_handler_decorator
 from aws_lambda_powertools.utilities.batch import (
@@ -9,14 +12,24 @@ from aws_lambda_powertools.utilities.batch import (
     BatchProcessor,
     EventType,
 )
-from aws_lambda_powertools.utilities.batch.types import PartialItemFailureResponse
-from aws_lambda_powertools.utilities.typing import LambdaContext
+from aws_lambda_powertools.utilities.batch.exceptions import UnexpectedBatchTypeError
+from aws_lambda_powertools.warnings import PowertoolsDeprecationWarning
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from aws_lambda_powertools.utilities.batch.types import PartialItemFailureResponse
+    from aws_lambda_powertools.utilities.typing import LambdaContext
 
 
 @lambda_handler_decorator
+@deprecated(
+    "`async_batch_processor` decorator is deprecated; use `async_process_partial_response` function instead.",
+    category=None,
+)
 def async_batch_processor(
     handler: Callable,
-    event: Dict,
+    event: dict,
     context: LambdaContext,
     record_handler: Callable[..., Awaitable[Any]],
     processor: AsyncBatchProcessor,
@@ -32,7 +45,7 @@ def async_batch_processor(
     ----------
     handler: Callable
         Lambda's handler
-    event: Dict
+    event: dict
         Lambda's Event
     context: LambdaContext
         Lambda's Context
@@ -41,9 +54,8 @@ def async_batch_processor(
     processor: AsyncBatchProcessor
         Batch Processor to handle partial failure cases
 
-    Examples
+    Example
     --------
-    **Processes Lambda's event with a BasePartialProcessor**
         >>> from aws_lambda_powertools.utilities.batch import async_batch_processor, AsyncBatchProcessor
         >>> from aws_lambda_powertools.utilities.data_classes.sqs_event import SQSRecord
         >>>
@@ -61,6 +73,14 @@ def async_batch_processor(
     -----------
     * Sync batch processors. Use `batch_processor` instead.
     """
+
+    warnings.warn(
+        "The `async_batch_processor` decorator is deprecated in V3 "
+        "and will be removed in the next major version. Use `async_process_partial_response` function instead.",
+        category=PowertoolsDeprecationWarning,
+        stacklevel=2,
+    )
+
     records = event["Records"]
 
     with processor(records, record_handler, lambda_context=context):
@@ -70,9 +90,13 @@ def async_batch_processor(
 
 
 @lambda_handler_decorator
+@deprecated(
+    "`batch_processor` decorator is deprecated; use `process_partial_response` function instead.",
+    category=None,
+)
 def batch_processor(
     handler: Callable,
-    event: Dict,
+    event: dict,
     context: LambdaContext,
     record_handler: Callable,
     processor: BatchProcessor,
@@ -88,7 +112,7 @@ def batch_processor(
     ----------
     handler: Callable
         Lambda's handler
-    event: Dict
+    event: dict
         Lambda's Event
     context: LambdaContext
         Lambda's Context
@@ -97,7 +121,7 @@ def batch_processor(
     processor: BatchProcessor
         Batch Processor to handle partial failure cases
 
-    Examples
+    Example
     --------
     **Processes Lambda's event with a BatchProcessor**
 
@@ -117,6 +141,14 @@ def batch_processor(
     -----------
     * Async batch processors. Use `async_batch_processor` instead.
     """
+
+    warnings.warn(
+        "The `batch_processor` decorator is deprecated in V3 "
+        "and will be removed in the next major version. Use `process_partial_response` function instead.",
+        category=PowertoolsDeprecationWarning,
+        stacklevel=2,
+    )
+
     records = event["Records"]
 
     with processor(records, record_handler, lambda_context=context):
@@ -126,7 +158,7 @@ def batch_processor(
 
 
 def process_partial_response(
-    event: Dict,
+    event: dict,
     record_handler: Callable,
     processor: BasePartialBatchProcessor,
     context: LambdaContext | None = None,
@@ -136,7 +168,7 @@ def process_partial_response(
 
     Parameters
     ----------
-    event: Dict
+    event: dict
         Lambda's original event
     record_handler: Callable
         Callable to process each record from the batch
@@ -150,7 +182,7 @@ def process_partial_response(
     result: PartialItemFailureResponse
         Lambda Partial Batch Response
 
-    Examples
+    Example
     --------
     **Processes Lambda's SQS event**
 
@@ -174,7 +206,12 @@ def process_partial_response(
     * Async batch processors. Use `async_process_partial_response` instead.
     """
     try:
-        records: List[Dict] = event.get("Records", [])
+        records: list[dict] = event.get("Records", [])
+        if not records or not isinstance(records, list):
+            raise UnexpectedBatchTypeError(
+                "Unexpected batch event type. Possible values are: SQS, KinesisDataStreams, DynamoDBStreams",
+            )
+
     except AttributeError:
         event_types = ", ".join(list(EventType.__members__))
         docs = "https://docs.powertools.aws.dev/lambda/python/latest/utilities/batch/#processing-messages-from-sqs"  # noqa: E501 # long-line
@@ -190,7 +227,7 @@ def process_partial_response(
 
 
 def async_process_partial_response(
-    event: Dict,
+    event: dict,
     record_handler: Callable,
     processor: AsyncBatchProcessor,
     context: LambdaContext | None = None,
@@ -200,7 +237,7 @@ def async_process_partial_response(
 
     Parameters
     ----------
-    event: Dict
+    event: dict
         Lambda's original event
     record_handler: Callable
         Callable to process each record from the batch
@@ -214,7 +251,7 @@ def async_process_partial_response(
     result: PartialItemFailureResponse
         Lambda Partial Batch Response
 
-    Examples
+    Example
     --------
     **Processes Lambda's SQS event**
 
@@ -238,7 +275,12 @@ def async_process_partial_response(
     * Sync batch processors. Use `process_partial_response` instead.
     """
     try:
-        records: List[Dict] = event.get("Records", [])
+        records: list[dict] = event.get("Records", [])
+        if not records or not isinstance(records, list):
+            raise UnexpectedBatchTypeError(
+                "Unexpected batch event type. Possible values are: SQS, KinesisDataStreams, DynamoDBStreams",
+            )
+
     except AttributeError:
         event_types = ", ".join(list(EventType.__members__))
         docs = "https://docs.powertools.aws.dev/lambda/python/latest/utilities/batch/#processing-messages-from-sqs"  # noqa: E501 # long-line

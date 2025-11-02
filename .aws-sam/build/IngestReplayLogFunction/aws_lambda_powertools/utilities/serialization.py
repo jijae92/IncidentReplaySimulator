@@ -1,7 +1,9 @@
 """Standalone functions to serialize/deserialize common data structures"""
+
 import base64
 import json
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 
 def base64_encode(data: str) -> str:

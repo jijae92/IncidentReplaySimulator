@@ -3,11 +3,10 @@ from __future__ import annotations
 import datetime
 import logging
 import os
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any
 
 import boto3
 from boto3.dynamodb.types import TypeDeserializer
-from botocore.config import Config
 from botocore.exceptions import ClientError
 
 from aws_lambda_powertools.shared import constants, user_agent
@@ -15,14 +14,16 @@ from aws_lambda_powertools.utilities.idempotency import BasePersistenceLayer
 from aws_lambda_powertools.utilities.idempotency.exceptions import (
     IdempotencyItemAlreadyExistsError,
     IdempotencyItemNotFoundError,
+    IdempotencyValidationError,
 )
-from aws_lambda_powertools.utilities.idempotency.persistence.base import (
+from aws_lambda_powertools.utilities.idempotency.persistence.datarecord import (
     STATUS_CONSTANTS,
     DataRecord,
 )
 
 if TYPE_CHECKING:
-    from mypy_boto3_dynamodb import DynamoDBClient
+    from botocore.config import Config
+    from mypy_boto3_dynamodb.client import DynamoDBClient
     from mypy_boto3_dynamodb.type_defs import AttributeValueTypeDef
 
 logger = logging.getLogger(__name__)
@@ -33,16 +34,16 @@ class DynamoDBPersistenceLayer(BasePersistenceLayer):
         self,
         table_name: str,
         key_attr: str = "id",
-        static_pk_value: Optional[str] = None,
-        sort_key_attr: Optional[str] = None,
+        static_pk_value: str | None = None,
+        sort_key_attr: str | None = None,
         expiry_attr: str = "expiration",
         in_progress_expiry_attr: str = "in_progress_expiration",
         status_attr: str = "status",
         data_attr: str = "data",
         validation_key_attr: str = "validation",
-        boto_config: Optional[Config] = None,
-        boto3_session: Optional[boto3.session.Session] = None,
-        boto3_client: "DynamoDBClient" | None = None,
+        boto_config: Config | None = None,
+        boto3_session: boto3.session.Session | None = None,
+        boto3_client: DynamoDBClient | None = None,
     ):
         """
         Initialize the DynamoDB client
@@ -66,14 +67,16 @@ class DynamoDBPersistenceLayer(BasePersistenceLayer):
             DynamoDB attribute name for status, by default "status"
         data_attr: str, optional
             DynamoDB attribute name for response data, by default "data"
+        validation_key_attr: str, optional
+            DynamoDB attribute name for hashed representation of the parts of the event used for validation
         boto_config: botocore.config.Config, optional
             Botocore configuration to pass during client initialization
-        boto3_session : boto3.Session, optional
+        boto3_session : boto3.session.Session, optional
             Boto3 session to use for AWS API communication
         boto3_client : DynamoDBClient, optional
             Boto3 DynamoDB Client to use, boto3_session and boto_config will be ignored if both are provided
 
-        Examples
+        Example
         --------
         **Create a DynamoDB persistence layer with custom settings**
 
@@ -88,11 +91,9 @@ class DynamoDBPersistenceLayer(BasePersistenceLayer):
             >>>     return {"StatusCode": 200}
         """
         if boto3_client is None:
-            self._boto_config = boto_config or Config()
-            self._boto3_session: boto3.Session = boto3_session or boto3.session.Session()
-            self.client: "DynamoDBClient" = self._boto3_session.client("dynamodb", config=self._boto_config)
-        else:
-            self.client = boto3_client
+            boto3_session = boto3_session or boto3.session.Session()
+            boto3_client = boto3_session.client("dynamodb", config=boto_config)
+        self.client = boto3_client
 
         user_agent.register_feature_to_client(client=self.client, feature="idempotency")
 
@@ -112,9 +113,17 @@ class DynamoDBPersistenceLayer(BasePersistenceLayer):
         self.data_attr = data_attr
         self.validation_key_attr = validation_key_attr
 
+        # Use DynamoDB's ReturnValuesOnConditionCheckFailure to optimize put and get operations and optimize costs.
+        # This feature is supported in boto3 versions 1.26.164 and later.
+        self.return_value_on_condition = (
+            {"ReturnValuesOnConditionCheckFailure": "ALL_OLD"}
+            if self.boto3_supports_condition_check_failure(boto3.__version__)
+            else {}
+        )
+
         self._deserializer = TypeDeserializer()
 
-        super(DynamoDBPersistenceLayer, self).__init__()
+        super().__init__()
 
     def _get_key(self, idempotency_key: str) -> dict:
         """Build primary key attribute simple or composite based on params.
@@ -136,13 +145,13 @@ class DynamoDBPersistenceLayer(BasePersistenceLayer):
             return {self.key_attr: {"S": self.static_pk_value}, self.sort_key_attr: {"S": idempotency_key}}
         return {self.key_attr: {"S": idempotency_key}}
 
-    def _item_to_data_record(self, item: Dict[str, Any]) -> DataRecord:
+    def _item_to_data_record(self, item: dict[str, Any]) -> DataRecord:
         """
         Translate raw item records from DynamoDB to DataRecord
 
         Parameters
         ----------
-        item: Dict[str, Union[str, int]]
+        item: dict[str, str | int]
             Item format from dynamodb response
 
         Returns
@@ -159,6 +168,7 @@ class DynamoDBPersistenceLayer(BasePersistenceLayer):
             in_progress_expiry_timestamp=data.get(self.in_progress_expiry_attr),
             response_data=data.get(self.data_attr),
             payload_hash=data.get(self.validation_key_attr),
+            sort_key=data[self.sort_key_attr] if self.sort_key_attr is not None else None,
         )
 
     def _get_record(self, idempotency_key) -> DataRecord:
@@ -219,6 +229,7 @@ class DynamoDBPersistenceLayer(BasePersistenceLayer):
             condition_expression = (
                 f"{idempotency_key_not_exist} OR {idempotency_expiry_expired} OR ({inprogress_expiry_expired})"
             )
+
             self.client.put_item(
                 TableName=self.table_name,
                 Item=item,
@@ -234,21 +245,60 @@ class DynamoDBPersistenceLayer(BasePersistenceLayer):
                     ":now_in_millis": {"N": str(int(now.timestamp() * 1000))},
                     ":inprogress": {"S": STATUS_CONSTANTS["INPROGRESS"]},
                 },
+                **self.return_value_on_condition,  # type: ignore[arg-type]
             )
         except ClientError as exc:
             error_code = exc.response.get("Error", {}).get("Code")
             if error_code == "ConditionalCheckFailedException":
-                logger.debug(
-                    f"Failed to put record for already existing idempotency key: {data_record.idempotency_key}",
-                )
-                raise IdempotencyItemAlreadyExistsError from exc
-            else:
-                raise
+                try:
+                    item = exc.response["Item"]  # type: ignore[typeddict-item]
+                except KeyError:
+                    logger.debug(
+                        f"Failed to put record for already existing idempotency key: {data_record.idempotency_key}",
+                    )
+                    raise IdempotencyItemAlreadyExistsError() from exc
+                else:
+                    old_data_record = self._item_to_data_record(item)
+                    logger.debug(
+                        f"Failed to put record for already existing idempotency key: "
+                        f"{data_record.idempotency_key} with status: {old_data_record.status}, "
+                        f"expiry_timestamp: {old_data_record.expiry_timestamp}, "
+                        f"and in_progress_expiry_timestamp: {old_data_record.in_progress_expiry_timestamp}",
+                    )
+
+                    try:
+                        self._validate_payload(data_payload=data_record, stored_data_record=old_data_record)
+                        self._save_to_cache(data_record=old_data_record)
+                    except IdempotencyValidationError as idempotency_validation_error:
+                        raise idempotency_validation_error from exc
+
+                    raise IdempotencyItemAlreadyExistsError(old_data_record=old_data_record) from exc
+
+            raise
+
+    @staticmethod
+    def boto3_supports_condition_check_failure(boto3_version: str) -> bool:
+        """
+        Check if the installed boto3 version supports condition check failure.
+
+        Params
+        ------
+        boto3_version: str
+            The boto3 version
+
+        Returns
+        -------
+        bool
+            True if the boto3 version supports condition check failure, False otherwise.
+        """
+        # Only supported in boto3 1.26.164 and above
+        major, minor, *patch = map(int, boto3_version.split("."))
+        return (major, minor, *patch) >= (1, 26, 164)
 
     def _update_record(self, data_record: DataRecord):
         logger.debug(f"Updating record for idempotency key: {data_record.idempotency_key}")
         update_expression = "SET #response_data = :response_data, #expiry = :expiry, #status = :status"
-        expression_attr_values: Dict[str, "AttributeValueTypeDef"] = {
+        expression_attr_values: dict[str, AttributeValueTypeDef] = {
             ":expiry": {"N": str(data_record.expiry_timestamp)},
             ":response_data": {"S": data_record.response_data},
             ":status": {"S": data_record.status},

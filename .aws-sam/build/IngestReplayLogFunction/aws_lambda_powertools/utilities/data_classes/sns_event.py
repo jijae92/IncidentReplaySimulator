@@ -1,6 +1,11 @@
-from typing import Dict, Iterator
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
 
 from aws_lambda_powertools.utilities.data_classes.common import DictWrapper
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 class SNSMessageAttribute(DictWrapper):
@@ -50,7 +55,7 @@ class SNSMessage(DictWrapper):
         return self["Message"]
 
     @property
-    def message_attributes(self) -> Dict[str, SNSMessageAttribute]:
+    def message_attributes(self) -> dict[str, SNSMessageAttribute]:
         return {k: SNSMessageAttribute(v) for (k, v) in self["MessageAttributes"].items()}
 
     @property

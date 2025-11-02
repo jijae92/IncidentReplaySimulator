@@ -1,9 +1,6 @@
-from typing import Dict, Optional
+from __future__ import annotations
 
-from aws_lambda_powertools.utilities.data_classes.common import DictWrapper
-from aws_lambda_powertools.utilities.data_classes.shared_functions import (
-    get_header_value,
-)
+from aws_lambda_powertools.utilities.data_classes.common import CaseInsensitiveDict, DictWrapper
 
 
 class S3ObjectContext(DictWrapper):
@@ -65,36 +62,13 @@ class S3ObjectUserRequest(DictWrapper):
         return self["url"]
 
     @property
-    def headers(self) -> Dict[str, str]:
+    def headers(self) -> dict[str, str]:
         """A map of string to strings containing the HTTP headers and their values from the original call,
         excluding any authorization-related headers.
 
         If the same header appears multiple times, their values are combined into a comma-delimited list.
         The case of the original headers is retained in this map."""
-        return self["headers"]
-
-    def get_header_value(
-        self,
-        name: str,
-        default_value: Optional[str] = None,
-        case_sensitive: Optional[bool] = False,
-    ) -> Optional[str]:
-        """Get header value by name
-
-        Parameters
-        ----------
-        name: str
-            Header name
-        default_value: str, optional
-            Default value if no value was found by name
-        case_sensitive: bool
-            Whether to use a case-sensitive look up
-        Returns
-        -------
-        str, optional
-            Header value
-        """
-        return get_header_value(self.headers, name, default_value, case_sensitive)
+        return CaseInsensitiveDict(self["headers"])
 
 
 class S3ObjectSessionIssuer(DictWrapper):
@@ -220,7 +194,7 @@ class S3ObjectUserIdentity(DictWrapper):
         return self["arn"]
 
     @property
-    def session_context(self) -> Optional[S3ObjectSessionContext]:
+    def session_context(self) -> S3ObjectSessionContext | None:
         """If the request was made with temporary security credentials,
         this element provides information about the session that was created for those credentials."""
         session_context = self.get("sessionContext")
@@ -246,7 +220,7 @@ class S3ObjectLambdaEvent(DictWrapper):
         import requests
         from aws_lambda_powertools.utilities.data_classes.s3_object_event import S3ObjectLambdaEvent
 
-        session = boto3.Session()
+        session = boto3.session.Session()
         s3 = session.client("s3")
 
         def lambda_handler(event, context):

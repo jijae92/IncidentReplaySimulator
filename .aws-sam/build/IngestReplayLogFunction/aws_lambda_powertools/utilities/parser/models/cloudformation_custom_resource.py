@@ -1,8 +1,6 @@
-from typing import Any, Dict, Union
+from typing import Any, Dict, Literal, Union
 
 from pydantic import BaseModel, Field, HttpUrl
-
-from aws_lambda_powertools.utilities.parser.types import Literal
 
 
 class CloudFormationCustomResourceBaseModel(BaseModel):
@@ -16,14 +14,16 @@ class CloudFormationCustomResourceBaseModel(BaseModel):
     resource_properties: Union[Dict[str, Any], BaseModel, None] = Field(None, alias="ResourceProperties")
 
 
-class CloudFormationCustomResourceCreateModel(CloudFormationCustomResourceBaseModel):
+class CloudFormationCustomResourceCreateModel(CloudFormationCustomResourceBaseModel):  # type: ignore[override]
     request_type: Literal["Create"] = Field(..., alias="RequestType")
 
 
-class CloudFormationCustomResourceDeleteModel(CloudFormationCustomResourceBaseModel):
+class CloudFormationCustomResourceDeleteModel(CloudFormationCustomResourceBaseModel):  # type: ignore[override]
     request_type: Literal["Delete"] = Field(..., alias="RequestType")
+    physical_resource_id: str = Field(..., alias="PhysicalResourceId")
 
 
-class CloudFormationCustomResourceUpdateModel(CloudFormationCustomResourceBaseModel):
+class CloudFormationCustomResourceUpdateModel(CloudFormationCustomResourceBaseModel):  # type: ignore[override]
     request_type: Literal["Update"] = Field(..., alias="RequestType")
+    physical_resource_id: str = Field(..., alias="PhysicalResourceId")
     old_resource_properties: Union[Dict[str, Any], BaseModel, None] = Field(None, alias="OldResourceProperties")

@@ -1,22 +1,60 @@
+from __future__ import annotations
+
 import contextlib
 import copy
 import functools
 import inspect
 import logging
-import numbers
 import os
-from typing import Any, Callable, Dict, List, Optional, Sequence, Union, cast, overload
+from typing import TYPE_CHECKING, Any, TypeVar, cast, overload
 
-from ..shared import constants
-from ..shared.functions import resolve_env_var_choice, resolve_truthy_env_var_choice
-from ..shared.lazy_import import LazyLoader
-from ..shared.types import AnyCallableT
-from .base import BaseProvider, BaseSegment
+from aws_lambda_powertools.shared import constants
+from aws_lambda_powertools.shared.functions import (
+    resolve_env_var_choice,
+    resolve_truthy_env_var_choice,
+    sanitize_xray_segment_name,
+)
+from aws_lambda_powertools.shared.lazy_import import LazyLoader
+from aws_lambda_powertools.shared.types import AnyCallableT
+
+if TYPE_CHECKING:
+    import numbers
+    from collections.abc import Callable, Sequence
+
+    from aws_lambda_powertools.tracing.base import BaseProvider, BaseSegment
 
 is_cold_start = True
 logger = logging.getLogger(__name__)
 
 aws_xray_sdk = LazyLoader(constants.XRAY_SDK_MODULE, globals(), constants.XRAY_SDK_MODULE)
+
+T = TypeVar("T")
+
+
+def _is_cold_start() -> bool:
+    """Verifies whether is cold start
+
+    Returns
+    -------
+    bool
+        cold start bool value
+    """
+    global is_cold_start
+
+    initialization_type = os.getenv(constants.LAMBDA_INITIALIZATION_TYPE)
+
+    # Check for Provisioned Concurrency environment
+    # AWS_LAMBDA_INITIALIZATION_TYPE is set when using Provisioned Concurrency
+    if initialization_type == "provisioned-concurrency":
+        is_cold_start = False
+        return False
+
+    if not is_cold_start:
+        return False
+
+    # This is a cold start - flip the flag and return True
+    is_cold_start = False
+    return True
 
 
 class Tracer:
@@ -53,7 +91,7 @@ class Tracer:
     disabled: bool
         Flag to explicitly disable tracing, useful when running/testing locally
         `Env POWERTOOLS_TRACE_DISABLED="true"`
-    patch_modules: Optional[Sequence[str]]
+    patch_modules: Sequence[str] | None
         Tuple of modules supported by tracing provider to patch, by default all modules are patched
     provider: BaseProvider
         Tracing provider, by default it is aws_xray_sdk.core.xray_recorder
@@ -71,13 +109,13 @@ class Tracer:
         tracer = Tracer(service="greeting")
 
         @tracer.capture_method
-        def greeting(name: str) -> Dict:
+        def greeting(name: str) -> dict:
             return {
                 "name": name
             }
 
         @tracer.capture_lambda_handler
-        def handler(event: dict, context: Any) -> Dict:
+        def handler(event: dict, context: Any) -> dict:
             print("Received event from Lambda...")
             response = greeting(name="Heitor")
             return response
@@ -88,7 +126,7 @@ class Tracer:
         tracer = Tracer(service="booking")
 
         @tracer.capture_method
-        def confirm_booking(booking_id: str) -> Dict:
+        def confirm_booking(booking_id: str) -> dict:
                 resp = add_confirmation(booking_id)
 
                 tracer.put_annotation("BookingConfirmation", resp["requestId"])
@@ -97,7 +135,7 @@ class Tracer:
                 return resp
 
         @tracer.capture_lambda_handler
-        def handler(event: dict, context: Any) -> Dict:
+        def handler(event: dict, context: Any) -> dict:
             print("Received event from Lambda...")
             booking_id = event.get("booking_id")
             response = confirm_booking(booking_id=booking_id)
@@ -110,7 +148,7 @@ class Tracer:
         tracer = Tracer()
 
         @tracer.capture_lambda_handler
-        def handler(event: dict, context: Any) -> Dict:
+        def handler(event: dict, context: Any) -> dict:
             print("Received event from Lambda...")
             response = greeting(name="Lessa")
             return response
@@ -122,7 +160,7 @@ class Tracer:
         tracer = Tracer()
 
         @tracer.capture_lambda_handler
-        def handler(event: dict, context: Any) -> Dict:
+        def handler(event: dict, context: Any) -> dict:
             ...
 
         # utils.py
@@ -135,7 +173,7 @@ class Tracer:
     * Async handler not supported
     """
 
-    _default_config: Dict[str, Any] = {
+    _default_config: dict[str, Any] = {
         "service": "",
         "disabled": False,
         "auto_patch": True,
@@ -146,11 +184,11 @@ class Tracer:
 
     def __init__(
         self,
-        service: Optional[str] = None,
-        disabled: Optional[bool] = None,
-        auto_patch: Optional[bool] = None,
-        patch_modules: Optional[Sequence[str]] = None,
-        provider: Optional[BaseProvider] = None,
+        service: str | None = None,
+        disabled: bool | None = None,
+        auto_patch: bool | None = None,
+        patch_modules: Sequence[str] | None = None,
+        provider: BaseProvider | None = None,
     ):
         self.__build_config(
             service=service,
@@ -173,14 +211,14 @@ class Tracer:
         if self._is_xray_provider():
             self._disable_xray_trace_batching()
 
-    def put_annotation(self, key: str, value: Union[str, numbers.Number, bool]):
+    def put_annotation(self, key: str, value: str | numbers.Number | bool):
         """Adds annotation to existing segment or subsegment
 
         Parameters
         ----------
         key : str
             Annotation key
-        value : Union[str, numbers.Number, bool]
+        value : str | numbers.Number | bool
             Value for annotation
 
         Example
@@ -197,7 +235,7 @@ class Tracer:
         logger.debug(f"Annotating on key '{key}' with '{value}'")
         self.provider.put_annotation(key=key, value=value)
 
-    def put_metadata(self, key: str, value: Any, namespace: Optional[str] = None):
+    def put_metadata(self, key: str, value: Any, namespace: str | None = None):
         """Adds metadata to existing segment or subsegment
 
         Parameters
@@ -225,14 +263,14 @@ class Tracer:
         logger.debug(f"Adding metadata on key '{key}' with '{value}' at namespace '{namespace}'")
         self.provider.put_metadata(key=key, value=value, namespace=namespace)
 
-    def patch(self, modules: Optional[Sequence[str]] = None):
+    def patch(self, modules: Sequence[str] | None = None):
         """Patch modules for instrumentation.
 
         Patches all supported modules by default if none are given.
 
         Parameters
         ----------
-        modules : Optional[Sequence[str]]
+        modules : Sequence[str] | None
             List of modules to be patched, optional by default
         """
         if self.disabled:
@@ -246,10 +284,10 @@ class Tracer:
 
     def capture_lambda_handler(
         self,
-        lambda_handler: Union[Callable[[Dict, Any], Any], Optional[Callable[[Dict, Any, Optional[Dict]], Any]]] = None,
-        capture_response: Optional[bool] = None,
-        capture_error: Optional[bool] = None,
-    ):
+        lambda_handler: Callable[[T, Any], Any] | Callable[[T, Any, Any], Any] | None = None,
+        capture_response: bool | None = None,
+        capture_error: bool | None = None,
+    ) -> Callable[..., Any]:
         """Decorator to create subsegment for lambda handlers
 
         As Lambda follows (event, context) signature we can remove some of the boilerplate
@@ -329,12 +367,9 @@ class Tracer:
 
                     raise
                 finally:
-                    global is_cold_start
+                    cold_start = _is_cold_start()
                     logger.debug("Annotating cold start")
-                    subsegment.put_annotation(key="ColdStart", value=is_cold_start)
-
-                    if is_cold_start:
-                        is_cold_start = False
+                    subsegment.put_annotation(key="ColdStart", value=cold_start)
 
                     if self.service:
                         subsegment.put_annotation(key="Service", value=self.service)
@@ -345,23 +380,21 @@ class Tracer:
 
     # see #465
     @overload
-    def capture_method(self, method: "AnyCallableT") -> "AnyCallableT":
-        ...  # pragma: no cover
+    def capture_method(self, method: AnyCallableT) -> AnyCallableT: ...  # pragma: no cover
 
     @overload
     def capture_method(
         self,
         method: None = None,
-        capture_response: Optional[bool] = None,
-        capture_error: Optional[bool] = None,
-    ) -> Callable[["AnyCallableT"], "AnyCallableT"]:
-        ...  # pragma: no cover
+        capture_response: bool | None = None,
+        capture_error: bool | None = None,
+    ) -> Callable[[AnyCallableT], AnyCallableT]: ...  # pragma: no cover
 
     def capture_method(
         self,
-        method: Optional[AnyCallableT] = None,
-        capture_response: Optional[bool] = None,
-        capture_error: Optional[bool] = None,
+        method: AnyCallableT | None = None,
+        capture_response: bool | None = None,
+        capture_error: bool | None = None,
     ) -> AnyCallableT:
         """Decorator to create subsegment for arbitrary functions
 
@@ -400,7 +433,7 @@ class Tracer:
             tracer = Tracer(service="booking")
 
             @tracer.capture_method
-            async def confirm_booking(booking_id: str) -> Dict:
+            async def confirm_booking(booking_id: str) -> dict:
                 resp = call_to_booking_service()
 
                 tracer.put_annotation("BookingConfirmation", resp["requestId"])
@@ -408,7 +441,7 @@ class Tracer:
 
                 return resp
 
-            def lambda_handler(event: dict, context: Any) -> Dict:
+            def lambda_handler(event: dict, context: Any) -> dict:
                 booking_id = event.get("booking_id")
                 asyncio.run(confirm_booking(booking_id=booking_id))
 
@@ -423,7 +456,7 @@ class Tracer:
                 yield resp[0]
                 yield resp[1]
 
-            def lambda_handler(event: dict, context: Any) -> Dict:
+            def lambda_handler(event: dict, context: Any) -> dict:
                 gen = bookings_generator(booking_id=booking_id)
                 result = list(gen)
 
@@ -439,7 +472,7 @@ class Tracer:
                 yield "example result"
                 cleanup_stuff()
 
-            def lambda_handler(event: dict, context: Any) -> Dict:
+            def lambda_handler(event: dict, context: Any) -> dict:
                 booking_id = event.get("booking_id")
 
                 with booking_actions(booking_id=booking_id) as booking:
@@ -522,7 +555,8 @@ class Tracer:
             )
 
         # Example: app.ClassA.get_all  # noqa ERA001
-        method_name = f"{method.__module__}.{method.__qualname__}"
+        # Valid characters can be found at http://docs.aws.amazon.com/xray/latest/devguide/xray-api-segmentdocuments.html
+        method_name = sanitize_xray_segment_name(f"{method.__module__}.{method.__qualname__}")
 
         capture_response = resolve_truthy_env_var_choice(
             env=os.getenv(constants.TRACER_CAPTURE_RESPONSE_ENV, "true"),
@@ -566,9 +600,9 @@ class Tracer:
     def _decorate_async_function(
         self,
         method: Callable,
-        capture_response: Optional[Union[bool, str]] = None,
-        capture_error: Optional[Union[bool, str]] = None,
-        method_name: Optional[str] = None,
+        capture_response: bool | str | None = None,
+        capture_error: bool | str | None = None,
+        method_name: str | None = None,
     ):
         @functools.wraps(method)
         async def decorate(*args, **kwargs):
@@ -599,9 +633,9 @@ class Tracer:
     def _decorate_generator_function(
         self,
         method: Callable,
-        capture_response: Optional[Union[bool, str]] = None,
-        capture_error: Optional[Union[bool, str]] = None,
-        method_name: Optional[str] = None,
+        capture_response: bool | str | None = None,
+        capture_error: bool | str | None = None,
+        method_name: str | None = None,
     ):
         @functools.wraps(method)
         def decorate(*args, **kwargs):
@@ -632,9 +666,9 @@ class Tracer:
     def _decorate_generator_function_with_context_manager(
         self,
         method: Callable,
-        capture_response: Optional[Union[bool, str]] = None,
-        capture_error: Optional[Union[bool, str]] = None,
-        method_name: Optional[str] = None,
+        capture_response: bool | str | None = None,
+        capture_error: bool | str | None = None,
+        method_name: str | None = None,
     ):
         @functools.wraps(method)
         @contextlib.contextmanager
@@ -666,9 +700,9 @@ class Tracer:
     def _decorate_sync_function(
         self,
         method: AnyCallableT,
-        capture_response: Optional[Union[bool, str]] = None,
-        capture_error: Optional[Union[bool, str]] = None,
-        method_name: Optional[str] = None,
+        capture_response: bool | str | None = None,
+        capture_error: bool | str | None = None,
+        method_name: str | None = None,
     ) -> AnyCallableT:
         @functools.wraps(method)
         def decorate(*args, **kwargs):
@@ -698,10 +732,10 @@ class Tracer:
 
     def _add_response_as_metadata(
         self,
-        method_name: Optional[str] = None,
-        data: Optional[Any] = None,
-        subsegment: Optional[BaseSegment] = None,
-        capture_response: Optional[Union[bool, str]] = None,
+        method_name: str | None = None,
+        data: Any | None = None,
+        subsegment: BaseSegment | None = None,
+        capture_response: bool | str | None = None,
     ):
         """Add response as metadata for given subsegment
 
@@ -726,7 +760,7 @@ class Tracer:
         method_name: str,
         error: Exception,
         subsegment: BaseSegment,
-        capture_error: Optional[bool] = None,
+        capture_error: bool | None = None,
     ):
         """Add full exception object as metadata for given subsegment
 
@@ -753,7 +787,7 @@ class Tracer:
         aws_xray_sdk.global_sdk_config.set_sdk_enabled(False)
 
     @staticmethod
-    def _is_tracer_disabled() -> Union[bool, str]:
+    def _is_tracer_disabled() -> bool | str:
         """Detects whether trace has been disabled
 
         Tracing is automatically disabled in the following conditions:
@@ -764,17 +798,19 @@ class Tracer:
 
         Returns
         -------
-        Union[bool, str]
+        bool | str
         """
         logger.debug("Verifying whether Tracing has been disabled")
         is_lambda_env = os.getenv(constants.LAMBDA_TASK_ROOT_ENV)
+        is_lambda_sam_cli = os.getenv(constants.SAM_LOCAL_ENV)
+        is_chalice_cli = os.getenv(constants.CHALICE_LOCAL_ENV)
         is_disabled = resolve_truthy_env_var_choice(env=os.getenv(constants.TRACER_DISABLED_ENV, "false"))
 
         if is_disabled:
             logger.debug("Tracing has been disabled via env var POWERTOOLS_TRACE_DISABLED")
             return is_disabled
 
-        if not is_lambda_env:
+        if not is_lambda_env or (is_lambda_sam_cli or is_chalice_cli):
             logger.debug("Running outside Lambda env; disabling Tracing")
             return True
 
@@ -782,11 +818,11 @@ class Tracer:
 
     def __build_config(
         self,
-        service: Optional[str] = None,
-        disabled: Optional[bool] = None,
-        auto_patch: Optional[bool] = None,
-        patch_modules: Optional[Sequence[str]] = None,
-        provider: Optional[BaseProvider] = None,
+        service: str | None = None,
+        disabled: bool | None = None,
+        auto_patch: bool | None = None,
+        patch_modules: Sequence[str] | None = None,
+        provider: BaseProvider | None = None,
     ):
         """Populates Tracer config for new and existing initializations"""
         is_disabled = disabled if disabled is not None else self._is_tracer_disabled()
@@ -828,7 +864,7 @@ class Tracer:
     def _is_xray_provider(self):
         return "aws_xray_sdk" in self.provider.__module__
 
-    def ignore_endpoint(self, hostname: Optional[str] = None, urls: Optional[List[str]] = None):
+    def ignore_endpoint(self, hostname: str | None = None, urls: list[str] | None = None):
         """If you want to ignore certain httplib requests you can do so based on the hostname or URL that is being
         requested.
 
@@ -842,7 +878,7 @@ class Tracer:
         ----------
         hostname : Optional, str
             The hostname is matched using the Python fnmatch library which does Unix glob style matching.
-        urls: Optional, List[str]
+        urls: Optional, list[str]
             List of urls to ignore. Example `tracer.ignore_endpoint(urls=["/ignored-url"])`
         """
         if not self._is_xray_provider():

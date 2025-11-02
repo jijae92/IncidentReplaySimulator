@@ -1,8 +1,0 @@
-boto3
-aws-lambda-powertools
-pyathena
-pandas
-python-dateutil
-moto[boto3]
-pytest
-pytest-cov

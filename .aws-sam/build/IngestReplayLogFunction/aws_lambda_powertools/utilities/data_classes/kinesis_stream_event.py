@@ -1,39 +1,44 @@
+from __future__ import annotations
+
 import base64
 import json
 import zlib
-from typing import Iterator, List
+from typing import TYPE_CHECKING, Any
 
 from aws_lambda_powertools.utilities.data_classes.cloud_watch_logs_event import (
     CloudWatchLogsDecodedData,
 )
 from aws_lambda_powertools.utilities.data_classes.common import DictWrapper
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 
 class KinesisStreamRecordPayload(DictWrapper):
     @property
     def approximate_arrival_timestamp(self) -> float:
         """The approximate time that the record was inserted into the stream"""
-        return float(self["kinesis"]["approximateArrivalTimestamp"])
+        return float(self["approximateArrivalTimestamp"])
 
     @property
     def data(self) -> str:
         """The data blob"""
-        return self["kinesis"]["data"]
+        return self["data"]
 
     @property
     def kinesis_schema_version(self) -> str:
         """Schema version for the record"""
-        return self["kinesis"]["kinesisSchemaVersion"]
+        return self["kinesisSchemaVersion"]
 
     @property
     def partition_key(self) -> str:
         """Identifies which shard in the stream the data record is assigned to"""
-        return self["kinesis"]["partitionKey"]
+        return self["partitionKey"]
 
     @property
     def sequence_number(self) -> str:
         """The unique identifier of the record within its shard"""
-        return self["kinesis"]["sequenceNumber"]
+        return self["sequenceNumber"]
 
     def data_as_bytes(self) -> bytes:
         """Decode binary encoded data as bytes"""
@@ -92,7 +97,19 @@ class KinesisStreamRecord(DictWrapper):
     @property
     def kinesis(self) -> KinesisStreamRecordPayload:
         """Underlying Kinesis record associated with the event"""
-        return KinesisStreamRecordPayload(self._data)
+        return KinesisStreamRecordPayload(self["kinesis"])
+
+
+class KinesisStreamWindow(DictWrapper):
+    @property
+    def start(self) -> str:
+        """The time window started"""
+        return self["start"]
+
+    @property
+    def end(self) -> str:
+        """The time window will end"""
+        return self["end"]
 
 
 class KinesisStreamEvent(DictWrapper):
@@ -101,6 +118,7 @@ class KinesisStreamEvent(DictWrapper):
     Documentation:
     --------------
     - https://docs.aws.amazon.com/lambda/latest/dg/with-kinesis.html
+    - https://docs.aws.amazon.com/lambda/latest/dg/services-kinesis-windows.html
     """
 
     @property
@@ -108,8 +126,35 @@ class KinesisStreamEvent(DictWrapper):
         for record in self["Records"]:
             yield KinesisStreamRecord(record)
 
+    @property
+    def window(self) -> KinesisStreamWindow | None:
+        window = self.get("window")
+        if window:
+            return KinesisStreamWindow(window)
+        return window
 
-def extract_cloudwatch_logs_from_event(event: KinesisStreamEvent) -> List[CloudWatchLogsDecodedData]:
+    @property
+    def state(self) -> dict[str, Any]:
+        return self.get("state") or {}
+
+    @property
+    def shard_id(self) -> str | None:
+        return self.get("shardId")
+
+    @property
+    def event_source_arn(self) -> str | None:
+        return self.get("eventSourceARN")
+
+    @property
+    def is_final_invoke_for_window(self) -> bool | None:
+        return self.get("isFinalInvokeForWindow")
+
+    @property
+    def is_window_terminated_early(self) -> bool | None:
+        return self.get("isWindowTerminatedEarly")
+
+
+def extract_cloudwatch_logs_from_event(event: KinesisStreamEvent) -> list[CloudWatchLogsDecodedData]:
     return [CloudWatchLogsDecodedData(record.kinesis.data_zlib_compressed_as_json()) for record in event.records]
 
 

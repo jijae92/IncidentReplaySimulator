@@ -1,12 +1,18 @@
+from __future__ import annotations
+
 import base64
 import json
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Callable, ClassVar, Dict, Iterator, List, Optional, Tuple
-
-from typing_extensions import Literal
+from functools import cached_property
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from aws_lambda_powertools.utilities.data_classes.common import DictWrapper
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Iterator
+
+    from typing_extensions import Literal
 
 
 @dataclass(repr=False, order=False, frozen=True)
@@ -16,7 +22,7 @@ class KinesisFirehoseDataTransformationRecordMetadata:
 
     Parameters
     ----------
-    partition_keys: Dict[str, str]
+    partition_keys: dict[str, str]
         A dict of partition keys/value in string format, e.g. `{"year":"2023","month":"09"}`
 
     Documentation:
@@ -24,9 +30,9 @@ class KinesisFirehoseDataTransformationRecordMetadata:
     - https://docs.aws.amazon.com/firehose/latest/dev/dynamic-partitioning.html
     """
 
-    partition_keys: Dict[str, str] = field(default_factory=lambda: {})
+    partition_keys: dict[str, str] = field(default_factory=lambda: {})
 
-    def asdict(self) -> Dict:
+    def asdict(self) -> dict:
         if self.partition_keys is not None:
             return {"partitionKeys": self.partition_keys}
         return {}
@@ -47,7 +53,7 @@ class KinesisFirehoseDataTransformationRecord:
 
         Use `data_from_text` or `data_from_json` methods to convert data if needed.
 
-    metadata: Optional[KinesisFirehoseDataTransformationRecordMetadata]
+    metadata: KinesisFirehoseDataTransformationRecordMetadata | None
         Metadata associated with this record; can contain partition keys.
 
         See: https://docs.aws.amazon.com/firehose/latest/dev/dynamic-partitioning.html
@@ -62,24 +68,23 @@ class KinesisFirehoseDataTransformationRecord:
     - https://docs.aws.amazon.com/firehose/latest/dev/data-transformation.html
     """
 
-    _valid_result_types: ClassVar[Tuple[str, str, str]] = ("Ok", "Dropped", "ProcessingFailed")
+    _valid_result_types: ClassVar[tuple[str, str, str]] = ("Ok", "Dropped", "ProcessingFailed")
 
     record_id: str
     result: Literal["Ok", "Dropped", "ProcessingFailed"] = "Ok"
     data: str = ""
-    metadata: Optional[KinesisFirehoseDataTransformationRecordMetadata] = None
+    metadata: KinesisFirehoseDataTransformationRecordMetadata | None = None
     json_serializer: Callable = json.dumps
     json_deserializer: Callable = json.loads
-    _json_data: Optional[Any] = None
 
-    def asdict(self) -> Dict:
+    def asdict(self) -> dict:
         if self.result not in self._valid_result_types:
             warnings.warn(
                 stacklevel=1,
                 message=f'The result "{self.result}" is not valid, Choose from "Ok", "Dropped", "ProcessingFailed"',
             )
 
-        record: Dict[str, Any] = {
+        record: dict[str, Any] = {
             "recordId": self.record_id,
             "result": self.result,
             "data": self.data,
@@ -102,14 +107,13 @@ class KinesisFirehoseDataTransformationRecord:
             return ""
         return self.data_as_bytes.decode("utf-8")
 
-    @property
-    def data_as_json(self) -> Dict:
+    @cached_property
+    def data_as_json(self) -> dict:
         """Decoded base64-encoded data loaded to json"""
         if not self.data:
             return {}
-        if self._json_data is None:
-            self._json_data = self.json_deserializer(self.data_as_text)
-        return self._json_data
+
+        return self.json_deserializer(self.data_as_text)
 
 
 @dataclass(repr=False, order=False)
@@ -122,7 +126,7 @@ class KinesisFirehoseDataTransformationResponse:
 
     Parameters
     ----------
-    records : List[KinesisFirehoseResponseRecord]
+    records : list[KinesisFirehoseResponseRecord]
         records of Kinesis Data Firehose response object,
         optional parameter at start. can be added later using `add_record` function.
 
@@ -162,12 +166,12 @@ class KinesisFirehoseDataTransformationResponse:
     ```
     """
 
-    records: List[KinesisFirehoseDataTransformationRecord] = field(default_factory=list)
+    records: list[KinesisFirehoseDataTransformationRecord] = field(default_factory=list)
 
     def add_record(self, record: KinesisFirehoseDataTransformationRecord):
         self.records.append(record)
 
-    def asdict(self) -> Dict:
+    def asdict(self) -> dict:
         if not self.records:
             raise ValueError("Amazon Kinesis Data Firehose doesn't accept empty response")
 
@@ -176,29 +180,24 @@ class KinesisFirehoseDataTransformationResponse:
 
 class KinesisFirehoseRecordMetadata(DictWrapper):
     @property
-    def _metadata(self) -> dict:
-        """Optional: metadata associated with this record; present only when Kinesis Stream is source"""
-        return self["kinesisRecordMetadata"]  # could raise KeyError
-
-    @property
     def shard_id(self) -> str:
         """Kinesis stream shard ID; present only when Kinesis Stream is source"""
-        return self._metadata["shardId"]
+        return self["shardId"]
 
     @property
     def partition_key(self) -> str:
         """Kinesis stream partition key; present only when Kinesis Stream is source"""
-        return self._metadata["partitionKey"]
+        return self["partitionKey"]
 
     @property
     def approximate_arrival_timestamp(self) -> int:
         """Kinesis stream approximate arrival ISO timestamp; present only when Kinesis Stream is source"""
-        return self._metadata["approximateArrivalTimestamp"]
+        return self["approximateArrivalTimestamp"]
 
     @property
     def sequence_number(self) -> str:
         """Kinesis stream sequence number; present only when Kinesis Stream is source"""
-        return self._metadata["sequenceNumber"]
+        return self["sequenceNumber"]
 
     @property
     def subsequence_number(self) -> int:
@@ -206,7 +205,7 @@ class KinesisFirehoseRecordMetadata(DictWrapper):
 
         Note: this will only be present for Kinesis streams using record aggregation
         """
-        return self._metadata["subsequenceNumber"]
+        return self["subsequenceNumber"]
 
 
 class KinesisFirehoseRecord(DictWrapper):
@@ -226,9 +225,10 @@ class KinesisFirehoseRecord(DictWrapper):
         return self["data"]
 
     @property
-    def metadata(self) -> Optional[KinesisFirehoseRecordMetadata]:
+    def metadata(self) -> KinesisFirehoseRecordMetadata | None:
         """Optional: metadata associated with this record; present only when Kinesis Stream is source"""
-        return KinesisFirehoseRecordMetadata(self._data) if self.get("kinesisRecordMetadata") else None
+        metadata = self.get("kinesisRecordMetadata")
+        return KinesisFirehoseRecordMetadata(metadata) if metadata else None
 
     @property
     def data_as_bytes(self) -> bytes:
@@ -240,18 +240,16 @@ class KinesisFirehoseRecord(DictWrapper):
         """Decoded base64-encoded data as text"""
         return self.data_as_bytes.decode("utf-8")
 
-    @property
+    @cached_property
     def data_as_json(self) -> dict:
         """Decoded base64-encoded data loaded to json"""
-        if self._json_data is None:
-            self._json_data = self._json_deserializer(self.data_as_text)
-        return self._json_data
+        return self._json_deserializer(self.data_as_text)
 
     def build_data_transformation_response(
         self,
         result: Literal["Ok", "Dropped", "ProcessingFailed"] = "Ok",
         data: str = "",
-        metadata: Optional[KinesisFirehoseDataTransformationRecordMetadata] = None,
+        metadata: KinesisFirehoseDataTransformationRecordMetadata | None = None,
     ) -> KinesisFirehoseDataTransformationRecord:
         """Create a KinesisFirehoseResponseRecord directly using the record_id and given values
 
@@ -293,7 +291,7 @@ class KinesisFirehoseEvent(DictWrapper):
         return self["deliveryStreamArn"]
 
     @property
-    def source_kinesis_stream_arn(self) -> Optional[str]:
+    def source_kinesis_stream_arn(self) -> str | None:
         """ARN of the Kinesis Stream; present only when Kinesis Stream is source"""
         return self.get("sourceKinesisStreamArn")
 

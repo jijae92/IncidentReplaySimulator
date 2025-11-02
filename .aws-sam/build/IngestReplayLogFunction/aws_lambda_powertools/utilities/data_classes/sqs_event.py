@@ -1,13 +1,19 @@
-from typing import Any, Dict, Iterator, Optional, Type, TypeVar
+from __future__ import annotations
+
+from functools import cached_property
+from typing import TYPE_CHECKING, Any, ItemsView, Iterator, TypeVar
 
 from aws_lambda_powertools.utilities.data_classes import S3Event
 from aws_lambda_powertools.utilities.data_classes.common import DictWrapper
 from aws_lambda_powertools.utilities.data_classes.sns_event import SNSMessage
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 
 class SQSRecordAttributes(DictWrapper):
     @property
-    def aws_trace_header(self) -> Optional[str]:
+    def aws_trace_header(self) -> str | None:
         """Returns the AWS X-Ray trace header string."""
         return self.get("AWSTraceHeader")
 
@@ -32,12 +38,12 @@ class SQSRecordAttributes(DictWrapper):
         return self["ApproximateFirstReceiveTimestamp"]
 
     @property
-    def sequence_number(self) -> Optional[str]:
+    def sequence_number(self) -> str | None:
         """The large, non-consecutive number that Amazon SQS assigns to each message."""
         return self.get("SequenceNumber")
 
     @property
-    def message_group_id(self) -> Optional[str]:
+    def message_group_id(self) -> str | None:
         """The tag that specifies that a message belongs to a specific message group.
 
         Messages that belong to the same message group are always processed one by one, in a
@@ -46,7 +52,7 @@ class SQSRecordAttributes(DictWrapper):
         return self.get("MessageGroupId")
 
     @property
-    def message_deduplication_id(self) -> Optional[str]:
+    def message_deduplication_id(self) -> str | None:
         """The token used for deduplication of sent messages.
 
         If a message with a particular message deduplication ID is sent successfully, any messages sent
@@ -54,17 +60,24 @@ class SQSRecordAttributes(DictWrapper):
         the 5-minute deduplication interval."""
         return self.get("MessageDeduplicationId")
 
+    @property
+    def dead_letter_queue_source_arn(self) -> str | None:
+        """The SQS queue ARN that sent the record to this DLQ.
+        Only present when a Lambda function is using a DLQ as an event source.
+        """
+        return self.get("DeadLetterQueueSourceArn")
+
 
 class SQSMessageAttribute(DictWrapper):
     """The user-specified message attribute value."""
 
     @property
-    def string_value(self) -> Optional[str]:
+    def string_value(self) -> str | None:
         """Strings are Unicode with UTF-8 binary encoding."""
         return self["stringValue"]
 
     @property
-    def binary_value(self) -> Optional[str]:
+    def binary_value(self) -> str | None:
         """Binary type attributes can store any binary data, such as compressed data, encrypted data, or images.
 
         Base64-encoded binary data object"""
@@ -76,10 +89,13 @@ class SQSMessageAttribute(DictWrapper):
         return self["dataType"]
 
 
-class SQSMessageAttributes(Dict[str, SQSMessageAttribute]):
-    def __getitem__(self, key: str) -> Optional[SQSMessageAttribute]:  # type: ignore
+class SQSMessageAttributes(dict[str, SQSMessageAttribute]):
+    def __getitem__(self, key: str) -> SQSMessageAttribute | None:  # type: ignore
         item = super().get(key)
         return None if item is None else SQSMessageAttribute(item)  # type: ignore
+
+    def items(self) -> ItemsView[str, SQSMessageAttribute]:  # type: ignore
+        return {k: SQSMessageAttribute(v) for k, v in super().items()}.items()  # type: ignore
 
 
 class SQSRecord(DictWrapper):
@@ -107,7 +123,7 @@ class SQSRecord(DictWrapper):
         """The message's contents (not URL-encoded)."""
         return self["body"]
 
-    @property
+    @cached_property
     def json_body(self) -> Any:
         """Deserializes JSON string available in 'body' property
 
@@ -132,9 +148,7 @@ class SQSRecord(DictWrapper):
         data: list = record.json_body  # ["telemetry_values"]
         ```
         """
-        if self._json_data is None:
-            self._json_data = self._json_deserializer(self["body"])
-        return self._json_data
+        return self._json_deserializer(self["body"])
 
     @property
     def attributes(self) -> SQSRecordAttributes:
@@ -221,7 +235,7 @@ class SQSRecord(DictWrapper):
         """
         return self._decode_nested_event(SNSMessage)
 
-    def _decode_nested_event(self, nested_event_class: Type[NestedEvent]) -> NestedEvent:
+    def _decode_nested_event(self, nested_event_class: type[NestedEvent]) -> NestedEvent:
         """Returns the nested event source data object.
 
         This is useful for handling events that are sent in the body of a SQS message.

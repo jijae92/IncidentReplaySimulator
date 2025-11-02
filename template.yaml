@@ -159,69 +159,42 @@ Resources:
   IngestReplayLogFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Handler: ingest_replay_log.handler.lambda_handler
+      Handler: ingest_replay_log_handler.lambda_handler
       CodeUri: src/
-      Policies:
-        - S3WritePolicy:
-            BucketName: !If [CreateResources, !If [UseAutoReplayBucket, !Ref ReplayBucket, !Ref ReplayBucketName], !Ref ExistingReplayBucketName]
-            Prefix: AWSLogs/
-      Tags: { Project: IncidentReplaySimulator }
+    Metadata:
+      BuildProperties:
+        BuildMethod: python3.11
+        Manifest: src/requirements.txt
 
   ReplayOrchestratorFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Handler: replay_orchestrator.handler.lambda_handler
+      Handler: replay_orchestrator_handler.lambda_handler
       CodeUri: src/
-      Policies:
-        - Statement:
-            - Effect: Allow
-              Action: [athena:StartQueryExecution, athena:GetQueryExecution, athena:GetQueryResults, athena:StopQueryExecution]
-              Resource: !If [CreateResources, !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${IrsAthenaWorkGroup}", !Sub "arn:aws:athena:${AWS::Region}:${AWS::AccountId}:workgroup/${ExistingAthenaWorkGroupName}"]
-            - Effect: Allow
-              Action: [s3:GetObject, s3:PutObject, s3:ListBucket, s3:AbortMultipartUpload, s3:ListMultipartUploadParts]
-              Resource:
-                - !If [CreateResources, !Sub "arn:aws:s3:::${ResultsBucket}", !Sub "arn:aws:s3:::${ExistingResultsBucketName}"]
-                - !If [CreateResources, !Sub "arn:aws:s3:::${ResultsBucket}/*", !Sub "arn:aws:s3:::${ExistingResultsBucketName}/*"]
-                - !If [CreateResources, !Sub "arn:aws:s3:::${ReplayBucket}/*", !Sub "arn:aws:s3:::${ExistingReplayBucketName}/*"]
-            - Effect: Allow
-              Action: [glue:GetDatabase, glue:GetTable, glue:GetTables, glue:CreatePartition, glue:BatchCreatePartition, glue:GetPartition, glue:GetPartitions, glue:UpdatePartition, glue:DeletePartition]
-              Resource:
-                - !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:catalog"
-                - !If [CreateResources, !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/${IrsGlueDatabase}", !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:database/${ExistingGlueDatabaseName}"]
-                - !If [CreateResources, !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${IrsGlueDatabase}/*", !Sub "arn:aws:glue:${AWS::Region}:${AWS::AccountId}:table/${ExistingGlueDatabaseName}/*"]
-      Tags: { Project: IncidentReplaySimulator }
+    Metadata:
+      BuildProperties:
+        BuildMethod: python3.11
+        Manifest: src/requirements.txt
 
   DetectorAdapterStubFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Handler: detector_adapter_stub.handler.lambda_handler
+      Handler: detector_adapter_stub_handler.lambda_handler
       CodeUri: src/
-      Policies:
-        - Statement:
-            - Effect: Allow
-              Action: [s3:GetObject, s3:PutObject, s3:ListBucket, s3:AbortMultipartUpload, s3:ListMultipartUploadParts]
-              Resource:
-                - !If [CreateResources, !Sub "arn:aws:s3:::${ResultsBucket}", !Sub "arn:aws:s3:::${ExistingResultsBucketName}"]
-                - !If [CreateResources, !Sub "arn:aws:s3:::${ResultsBucket}/*", !Sub "arn:aws:s3:::${ExistingResultsBucketName}/*"]
-      Tags: { Project: IncidentReplaySimulator }
+    Metadata:
+      BuildProperties:
+        BuildMethod: python3.11
+        Manifest: src/requirements.txt
 
   ReporterFunction:
     Type: AWS::Serverless::Function
     Properties:
-      Handler: reporter.handler.lambda_handler
+      Handler: reporter_handler.lambda_handler
       CodeUri: src/
-      Policies:
-        - Statement:
-            - Effect: Allow
-              Action: [s3:GetObject, s3:PutObject, s3:ListBucket, s3:AbortMultipartUpload, s3:ListMultipartUploadParts]
-              Resource:
-                - !If [CreateResources, !Sub "arn:aws:s3:::${ResultsBucket}", !Sub "arn:aws:s3:::${ExistingResultsBucketName}"]
-                - !If [CreateResources, !Sub "arn:aws:s3:::${ResultsBucket}/*", !Sub "arn:aws:s3:::${ExistingResultsBucketName}/*"]
-            - Effect: Allow
-              Action: [sns:Publish]
-              Resource: !Ref NotificationSnsTopic
-      Tags: { Project: IncidentReplaySimulator }
-
+    Metadata:
+      BuildProperties:
+        BuildMethod: python3.11
+        Manifest: src/requirements.txt
 Outputs:
   ReplayBucketNameOut:
     Description: "S3 Bucket for CloudTrail Replay Logs"

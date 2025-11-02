@@ -1,8 +1,11 @@
 """
 Serialization for supporting idempotency
 """
+
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Any, Dict
+from typing import Any
 
 
 class BaseIdempotencySerializer(ABC):
@@ -11,11 +14,11 @@ class BaseIdempotencySerializer(ABC):
     """
 
     @abstractmethod
-    def to_dict(self, data: Any) -> Dict:
+    def to_dict(self, data: Any) -> dict:
         raise NotImplementedError("Implementation of to_dict is required")
 
     @abstractmethod
-    def from_dict(self, data: Dict) -> Any:
+    def from_dict(self, data: dict) -> Any:
         raise NotImplementedError("Implementation of from_dict is required")
 
 

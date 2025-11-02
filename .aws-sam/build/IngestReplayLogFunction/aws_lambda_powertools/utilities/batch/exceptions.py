@@ -1,17 +1,18 @@
 """
 Batch processing exceptions
 """
+
 from __future__ import annotations
 
 import traceback
 from types import TracebackType
-from typing import List, Optional, Tuple, Type
+from typing import Optional, Tuple, Type
 
 ExceptionInfo = Tuple[Optional[Type[BaseException]], Optional[BaseException], Optional[TracebackType]]
 
 
 class BaseBatchProcessingError(Exception):
-    def __init__(self, msg="", child_exceptions: List[ExceptionInfo] | None = None):
+    def __init__(self, msg="", child_exceptions: list[ExceptionInfo] | None = None):
         super().__init__(msg)
         self.msg = msg
         self.child_exceptions = child_exceptions or []
@@ -29,9 +30,31 @@ class BaseBatchProcessingError(Exception):
 class BatchProcessingError(BaseBatchProcessingError):
     """When all batch records failed to be processed"""
 
-    def __init__(self, msg="", child_exceptions: List[ExceptionInfo] | None = None):
+    def __init__(self, msg="", child_exceptions: list[ExceptionInfo] | None = None):
         super().__init__(msg, child_exceptions)
 
     def __str__(self):
-        parent_exception_str = super(BatchProcessingError, self).__str__()
+        parent_exception_str = super().__str__()
         return self.format_exceptions(parent_exception_str)
+
+
+class UnexpectedBatchTypeError(BatchProcessingError):
+    """Error thrown by the Batch Processing utility when a partial processor receives an unexpected batch type"""
+
+    pass
+
+
+class SQSFifoCircuitBreakerError(Exception):
+    """
+    Signals a record not processed due to the SQS FIFO processing being interrupted
+    """
+
+    pass
+
+
+class SQSFifoMessageGroupCircuitBreakerError(Exception):
+    """
+    Signals a record not processed due to the SQS FIFO message group processing being interrupted
+    """
+
+    pass

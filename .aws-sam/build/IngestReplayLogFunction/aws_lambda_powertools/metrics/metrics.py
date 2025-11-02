@@ -1,12 +1,16 @@
 # NOTE: keeps for compatibility
 from __future__ import annotations
 
-from typing import Any, Dict
+from typing import TYPE_CHECKING, Any
 
-from aws_lambda_powertools.metrics.base import MetricResolution, MetricUnit
 from aws_lambda_powertools.metrics.provider.cloudwatch_emf.cloudwatch import AmazonCloudWatchEMFProvider
-from aws_lambda_powertools.metrics.provider.cloudwatch_emf.types import CloudWatchEMFOutput
-from aws_lambda_powertools.shared.types import AnyCallableT
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from aws_lambda_powertools.metrics.base import MetricResolution, MetricUnit
+    from aws_lambda_powertools.metrics.provider.cloudwatch_emf.types import CloudWatchEMFOutput
+    from aws_lambda_powertools.shared.types import AnyCallableT
 
 
 class Metrics:
@@ -45,6 +49,8 @@ class Metrics:
         metric namespace
     POWERTOOLS_SERVICE_NAME : str
         service name used for default dimension
+    POWERTOOLS_METRICS_DISABLED: bool
+        Powertools metrics disabled (e.g. `"true", "True", "TRUE"`)
 
     Parameters
     ----------
@@ -72,16 +78,17 @@ class Metrics:
     # and not get caught by accident with metrics data loss, or data deduplication
     # e.g., m1 and m2 add metric ProductCreated, however m1 has 'version' dimension  but m2 doesn't
     # Result: ProductCreated is created twice as we now have 2 different EMF blobs
-    _metrics: Dict[str, Any] = {}
-    _dimensions: Dict[str, str] = {}
-    _metadata: Dict[str, Any] = {}
-    _default_dimensions: Dict[str, Any] = {}
+    _metrics: dict[str, Any] = {}
+    _dimensions: dict[str, str] = {}
+    _metadata: dict[str, Any] = {}
+    _default_dimensions: dict[str, Any] = {}
 
     def __init__(
         self,
         service: str | None = None,
         namespace: str | None = None,
         provider: AmazonCloudWatchEMFProvider | None = None,
+        function_name: str | None = None,
     ):
         self.metric_set = self._metrics
         self.metadata_set = self._metadata
@@ -98,6 +105,7 @@ class Metrics:
                 dimension_set=self.dimension_set,
                 metadata_set=self.metadata_set,
                 default_dimensions=self._default_dimensions,
+                function_name=function_name,
             )
         else:
             self.provider = provider
@@ -116,14 +124,27 @@ class Metrics:
 
     def serialize_metric_set(
         self,
-        metrics: Dict | None = None,
-        dimensions: Dict | None = None,
-        metadata: Dict | None = None,
+        metrics: dict | None = None,
+        dimensions: dict | None = None,
+        metadata: dict | None = None,
     ) -> CloudWatchEMFOutput:
         return self.provider.serialize_metric_set(metrics=metrics, dimensions=dimensions, metadata=metadata)
 
     def add_metadata(self, key: str, value: Any) -> None:
         self.provider.add_metadata(key=key, value=value)
+
+    def set_timestamp(self, timestamp: int):
+        """
+        Set the timestamp for the metric.
+
+        Parameters:
+        -----------
+        timestamp: int | datetime.datetime
+            The timestamp to create the metric.
+            If an integer is provided, it is assumed to be the epoch time in milliseconds.
+            If a datetime object is provided, it will be converted to epoch time in milliseconds.
+        """
+        self.provider.set_timestamp(timestamp=timestamp)
 
     def flush_metrics(self, raise_on_empty_metrics: bool = False) -> None:
         self.provider.flush_metrics(raise_on_empty_metrics=raise_on_empty_metrics)
@@ -133,9 +154,9 @@ class Metrics:
         lambda_handler: AnyCallableT | None = None,
         capture_cold_start_metric: bool = False,
         raise_on_empty_metrics: bool = False,
-        default_dimensions: Dict[str, str] | None = None,
-        **kwargs,
-    ):
+        default_dimensions: dict[str, str] | None = None,
+        **kwargs: dict[str, Any],
+    ) -> Callable[..., Any]:
         return self.provider.log_metrics(
             lambda_handler=lambda_handler,
             capture_cold_start_metric=capture_cold_start_metric,
@@ -150,7 +171,7 @@ class Metrics:
 
         Parameters
         ----------
-        dimensions : Dict[str, Any], optional
+        dimensions : dict[str, Any], optional
             metric dimensions as key=value
 
         Example

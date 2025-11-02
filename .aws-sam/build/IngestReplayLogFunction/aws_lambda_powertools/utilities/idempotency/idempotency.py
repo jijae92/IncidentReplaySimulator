@@ -1,25 +1,36 @@
 """
 Primary interface for idempotent Lambda functions utility
 """
+
+from __future__ import annotations
+
 import functools
 import logging
 import os
+import warnings
 from inspect import isclass
-from typing import Any, Callable, Dict, Optional, Type, Union, cast
+from typing import TYPE_CHECKING, Any, cast
 
 from aws_lambda_powertools.middleware_factory import lambda_handler_decorator
 from aws_lambda_powertools.shared import constants
+from aws_lambda_powertools.shared.functions import strtobool
 from aws_lambda_powertools.shared.types import AnyCallableT
 from aws_lambda_powertools.utilities.idempotency.base import IdempotencyHandler
 from aws_lambda_powertools.utilities.idempotency.config import IdempotencyConfig
-from aws_lambda_powertools.utilities.idempotency.persistence.base import (
-    BasePersistenceLayer,
-)
 from aws_lambda_powertools.utilities.idempotency.serialization.base import (
     BaseIdempotencyModelSerializer,
     BaseIdempotencySerializer,
 )
-from aws_lambda_powertools.utilities.typing import LambdaContext
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from aws_lambda_powertools.utilities.idempotency.persistence.base import (
+        BasePersistenceLayer,
+    )
+    from aws_lambda_powertools.utilities.typing import LambdaContext
+
+from aws_lambda_powertools.warnings import PowertoolsUserWarning
 
 logger = logging.getLogger(__name__)
 
@@ -27,10 +38,11 @@ logger = logging.getLogger(__name__)
 @lambda_handler_decorator
 def idempotent(
     handler: Callable[[Any, LambdaContext], Any],
-    event: Dict[str, Any],
+    event: dict[str, Any],
     context: LambdaContext,
     persistence_store: BasePersistenceLayer,
-    config: Optional[IdempotencyConfig] = None,
+    config: IdempotencyConfig | None = None,
+    key_prefix: str | None = None,
     **kwargs,
 ) -> Any:
     """
@@ -40,32 +52,42 @@ def idempotent(
     ----------
     handler: Callable
         Lambda's handler
-    event: Dict
+    event: dict
         Lambda's Event
-    context: Dict
+    context: dict
         Lambda's Context
     persistence_store: BasePersistenceLayer
         Instance of BasePersistenceLayer to store data
     config: IdempotencyConfig
         Configuration
+    key_prefix: str | Optional
+        Custom prefix for idempotency key: key_prefix#hash
 
-    Examples
+    Example
     --------
     **Processes Lambda's event in an idempotent manner**
 
-        >>> from aws_lambda_powertools.utilities.idempotency import (
-        >>>    idempotent, DynamoDBPersistenceLayer, IdempotencyConfig
-        >>> )
-        >>>
-        >>> idem_config=IdempotencyConfig(event_key_jmespath="body")
-        >>> persistence_layer = DynamoDBPersistenceLayer(table_name="idempotency_store")
-        >>>
-        >>> @idempotent(config=idem_config, persistence_store=persistence_layer)
-        >>> def handler(event, context):
-        >>>     return {"StatusCode": 200}
+        from aws_lambda_powertools.utilities.idempotency import (
+           idempotent, DynamoDBPersistenceLayer, IdempotencyConfig
+        )
+
+        idem_config=IdempotencyConfig(event_key_jmespath="body")
+        persistence_layer = DynamoDBPersistenceLayer(table_name="idempotency_store")
+
+        @idempotent(config=idem_config, persistence_store=persistence_layer)
+        def handler(event, context):
+            return {"StatusCode": 200}
     """
 
-    if os.getenv(constants.IDEMPOTENCY_DISABLED_ENV):
+    # Skip idempotency controls when POWERTOOLS_IDEMPOTENCY_DISABLED has a truthy value
+    # Raises a warning if not running in development mode
+    if strtobool(os.getenv(constants.IDEMPOTENCY_DISABLED_ENV, "false")):
+        warnings.warn(
+            message="Disabling idempotency is intended for development environments only "
+            "and should not be used in production.",
+            category=PowertoolsUserWarning,
+            stacklevel=2,
+        )
         return handler(event, context, **kwargs)
 
     config = config or IdempotencyConfig()
@@ -77,6 +99,7 @@ def idempotent(
         function_payload=event,
         config=config,
         persistence_store=persistence_store,
+        key_prefix=key_prefix,
         function_args=args,
         function_kwargs=kwargs,
     )
@@ -85,12 +108,13 @@ def idempotent(
 
 
 def idempotent_function(
-    function: Optional[AnyCallableT] = None,
+    function: AnyCallableT | None = None,
     *,
     data_keyword_argument: str,
     persistence_store: BasePersistenceLayer,
-    config: Optional[IdempotencyConfig] = None,
-    output_serializer: Optional[Union[BaseIdempotencySerializer, Type[BaseIdempotencyModelSerializer]]] = None,
+    config: IdempotencyConfig | None = None,
+    output_serializer: BaseIdempotencySerializer | type[BaseIdempotencyModelSerializer] | None = None,
+    key_prefix: str | None = None,
     **kwargs: Any,
 ) -> Any:
     """
@@ -106,13 +130,15 @@ def idempotent_function(
         Instance of BasePersistenceLayer to store data
     config: IdempotencyConfig
         Configuration
-    output_serializer: Optional[Union[BaseIdempotencySerializer, Type[BaseIdempotencyModelSerializer]]]
+    output_serializer: BaseIdempotencySerializer | type[BaseIdempotencyModelSerializer] | None
             Serializer to transform the data to and from a dictionary.
             If not supplied, no serialization is done via the NoOpSerializer.
             In case a serializer of type inheriting BaseIdempotencyModelSerializer is given,
             the serializer is derived from the function return type.
+    key_prefix: str | Optional
+        Custom prefix for idempotency key: key_prefix#hash
 
-    Examples
+    Example
     --------
     **Processes an order in an idempotent manner**
 
@@ -137,6 +163,7 @@ def idempotent_function(
                 persistence_store=persistence_store,
                 config=config,
                 output_serializer=output_serializer,
+                key_prefix=key_prefix,
                 **kwargs,
             ),
         )
@@ -149,7 +176,15 @@ def idempotent_function(
 
     @functools.wraps(function)
     def decorate(*args, **kwargs):
-        if os.getenv(constants.IDEMPOTENCY_DISABLED_ENV):
+        # Skip idempotency controls when POWERTOOLS_IDEMPOTENCY_DISABLED has a truthy value
+        # Raises a warning if not running in development mode
+        if strtobool(os.getenv(constants.IDEMPOTENCY_DISABLED_ENV, "false")):
+            warnings.warn(
+                message="Disabling idempotency is intended for development environments only "
+                "and should not be used in production.",
+                category=PowertoolsUserWarning,
+                stacklevel=2,
+            )
             return function(*args, **kwargs)
 
         if data_keyword_argument not in kwargs:
@@ -166,6 +201,7 @@ def idempotent_function(
             config=config,
             persistence_store=persistence_store,
             output_serializer=output_serializer,
+            key_prefix=key_prefix,
             function_args=args,
             function_kwargs=kwargs,
         )

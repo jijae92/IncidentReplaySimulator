@@ -1,3 +1,9 @@
+"""
+Metrics utility
+!!! abstract "Usage Documentation"
+    [`Metrics`](../../core/metrics.md)
+"""
+
 from __future__ import annotations
 
 import datetime
@@ -9,7 +15,7 @@ import os
 import warnings
 from collections import defaultdict
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Generator, List, Optional, Union
+from typing import TYPE_CHECKING, Any
 
 from aws_lambda_powertools.metrics.exceptions import (
     MetricResolutionError,
@@ -17,15 +23,26 @@ from aws_lambda_powertools.metrics.exceptions import (
     MetricValueError,
     SchemaValidationError,
 )
+from aws_lambda_powertools.metrics.functions import convert_timestamp_to_emf_format, validate_emf_timestamp
 from aws_lambda_powertools.metrics.provider import cold_start
-from aws_lambda_powertools.metrics.provider.cloudwatch_emf.constants import MAX_DIMENSIONS, MAX_METRICS
+from aws_lambda_powertools.metrics.provider.cloudwatch_emf.constants import (
+    MAX_DIMENSIONS,
+    MAX_METRIC_NAME_LENGTH,
+    MAX_METRICS,
+    MIN_METRIC_NAME_LENGTH,
+)
+from aws_lambda_powertools.metrics.provider.cloudwatch_emf.exceptions import MetricNameError
 from aws_lambda_powertools.metrics.provider.cloudwatch_emf.metric_properties import MetricResolution, MetricUnit
 from aws_lambda_powertools.metrics.provider.cold_start import (
     reset_cold_start_flag,  # noqa: F401  # backwards compatibility
 )
-from aws_lambda_powertools.metrics.types import MetricNameUnitResolution
 from aws_lambda_powertools.shared import constants
 from aws_lambda_powertools.shared.functions import resolve_env_var_choice
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Generator
+
+    from aws_lambda_powertools.metrics.types import MetricNameUnitResolution
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +82,10 @@ class MetricManager:
 
     def __init__(
         self,
-        metric_set: Dict[str, Any] | None = None,
-        dimension_set: Dict | None = None,
+        metric_set: dict[str, Any] | None = None,
+        dimension_set: dict | None = None,
         namespace: str | None = None,
-        metadata_set: Dict[str, Any] | None = None,
+        metadata_set: dict[str, Any] | None = None,
         service: str | None = None,
     ):
         self.metric_set = metric_set if metric_set is not None else {}
@@ -76,6 +93,8 @@ class MetricManager:
         self.namespace = resolve_env_var_choice(choice=namespace, env=os.getenv(constants.METRICS_NAMESPACE_ENV))
         self.service = resolve_env_var_choice(choice=service, env=os.getenv(constants.SERVICE_NAME_ENV))
         self.metadata_set = metadata_set if metadata_set is not None else {}
+        self.timestamp: int | None = None
+
         self._metric_units = [unit.value for unit in MetricUnit]
         self._metric_unit_valid_options = list(MetricUnit.__members__)
         self._metric_resolutions = [resolution.value for resolution in MetricResolution]
@@ -107,26 +126,33 @@ class MetricManager:
         ----------
         name : str
             Metric name
-        unit : Union[MetricUnit, str]
+        unit : MetricUnit | str
             `aws_lambda_powertools.helper.models.MetricUnit`
         value : float
             Metric value
-        resolution : Union[MetricResolution, int]
+        resolution : MetricResolution | int
             `aws_lambda_powertools.helper.models.MetricResolution`
 
         Raises
         ------
+        MetricNameError
+            When metric name does not fall under Cloudwatch constraints
         MetricUnitError
             When metric unit is not supported by CloudWatch
         MetricResolutionError
             When metric resolution is not supported by CloudWatch
         """
+        name = name.strip()
+        if len(name) < MIN_METRIC_NAME_LENGTH or len(name) > MAX_METRIC_NAME_LENGTH:
+            raise MetricNameError(
+                f"The metric name should be between {MIN_METRIC_NAME_LENGTH} and {MAX_METRIC_NAME_LENGTH} characters",
+            )
         if not isinstance(value, numbers.Number):
             raise MetricValueError(f"{value} is not a valid number")
 
         unit = self._extract_metric_unit_value(unit=unit)
         resolution = self._extract_metric_resolution_value(resolution=resolution)
-        metric: Dict = self.metric_set.get(name, defaultdict(list))
+        metric: dict = self.metric_set.get(name, defaultdict(list))
         metric["Unit"] = unit
         metric["StorageResolution"] = resolution
         metric["Value"].append(float(value))
@@ -144,19 +170,19 @@ class MetricManager:
 
     def serialize_metric_set(
         self,
-        metrics: Dict | None = None,
-        dimensions: Dict | None = None,
-        metadata: Dict | None = None,
-    ) -> Dict:
+        metrics: dict | None = None,
+        dimensions: dict | None = None,
+        metadata: dict | None = None,
+    ) -> dict:
         """Serializes metric and dimensions set
 
         Parameters
         ----------
-        metrics : Dict, optional
+        metrics : dict, optional
             Dictionary of metrics to serialize, by default None
-        dimensions : Dict, optional
+        dimensions : dict, optional
             Dictionary of dimensions to serialize, by default None
-        metadata: Dict, optional
+        metadata: dict, optional
             Dictionary of metadata to serialize, by default None
 
         Example
@@ -169,7 +195,7 @@ class MetricManager:
 
         Returns
         -------
-        Dict
+        dict
             Serialized metrics following EMF specification
 
         Raises
@@ -203,8 +229,8 @@ class MetricManager:
         #
         # In case using high-resolution metrics, add StorageResolution field
         # Example: [ { "Name": "metric_name", "Unit": "Count", "StorageResolution": 1 } ] # noqa ERA001
-        metric_definition: List[MetricNameUnitResolution] = []
-        metric_names_and_values: Dict[str, float] = {}  # { "metric_name": 1.0 }
+        metric_definition: list[MetricNameUnitResolution] = []
+        metric_names_and_values: dict[str, float] = {}  # { "metric_name": 1.0 }
 
         for metric_name in metrics:
             metric: dict = metrics[metric_name]
@@ -224,7 +250,7 @@ class MetricManager:
 
         return {
             "_aws": {
-                "Timestamp": int(datetime.datetime.now().timestamp() * 1000),  # epoch
+                "Timestamp": self.timestamp or int(datetime.datetime.now().timestamp() * 1000),  # epoch
                 "CloudWatchMetrics": [
                     {
                         "Namespace": self.namespace,  # "test_namespace"
@@ -296,6 +322,31 @@ class MetricManager:
         else:
             self.metadata_set[str(key)] = value
 
+    def set_timestamp(self, timestamp: int | datetime.datetime):
+        """
+        Set the timestamp for the metric.
+
+        Parameters:
+        -----------
+        timestamp: int | datetime.datetime
+            The timestamp to create the metric.
+            If an integer is provided, it is assumed to be the epoch time in milliseconds.
+            If a datetime object is provided, it will be converted to epoch time in milliseconds.
+        """
+        # The timestamp must be a Datetime object or an integer representing an epoch time.
+        # This should not exceed 14 days in the past or be more than 2 hours in the future.
+        # Any metrics failing to meet this criteria will be skipped by Amazon CloudWatch.
+        # See: https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Embedded_Metric_Format_Specification.html
+        # See: https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CloudWatch-Logs-Monitoring-CloudWatch-Metrics.html
+        if not validate_emf_timestamp(timestamp):
+            warnings.warn(
+                "This metric doesn't meet the requirements and will be skipped by Amazon CloudWatch. "
+                "Ensure the timestamp is within 14 days past or 2 hours future.",
+                stacklevel=2,
+            )
+
+        self.timestamp = convert_timestamp_to_emf_format(timestamp)
+
     def clear_metrics(self) -> None:
         logger.debug("Clearing out existing metric set from memory")
         self.metric_set.clear()
@@ -326,10 +377,10 @@ class MetricManager:
 
     def log_metrics(
         self,
-        lambda_handler: Callable[[Dict, Any], Any] | Optional[Callable[[Dict, Any, Optional[Dict]], Any]] = None,
+        lambda_handler: Callable[[dict, Any], Any] | Callable[[dict, Any, dict | None], Any] | None = None,
         capture_cold_start_metric: bool = False,
         raise_on_empty_metrics: bool = False,
-        default_dimensions: Dict[str, str] | None = None,
+        default_dimensions: dict[str, str] | None = None,
     ):
         """Decorator to serialize and publish metrics at the end of a function execution.
 
@@ -357,7 +408,7 @@ class MetricManager:
             captures cold start metric, by default False
         raise_on_empty_metrics : bool, optional
             raise exception if no metrics are emitted, by default False
-        default_dimensions: Dict[str, str], optional
+        default_dimensions: dict[str, str], optional
             metric dimensions as key=value that will always be present
 
         Raises
@@ -392,12 +443,12 @@ class MetricManager:
 
         return decorate
 
-    def _extract_metric_resolution_value(self, resolution: Union[int, MetricResolution]) -> int:
+    def _extract_metric_resolution_value(self, resolution: int | MetricResolution) -> int:
         """Return metric value from metric unit whether that's str or MetricResolution enum
 
         Parameters
         ----------
-        unit : Union[int, MetricResolution]
+        unit : int | MetricResolution
             Metric resolution
 
         Returns
@@ -420,12 +471,12 @@ class MetricManager:
             f"Invalid metric resolution '{resolution}', expected either option: {self._metric_resolutions}",  # noqa: E501
         )
 
-    def _extract_metric_unit_value(self, unit: Union[str, MetricUnit]) -> str:
+    def _extract_metric_unit_value(self, unit: str | MetricUnit) -> str:
         """Return metric value from metric unit whether that's str or MetricUnit enum
 
         Parameters
         ----------
-        unit : Union[str, MetricUnit]
+        unit : str | MetricUnit
             Metric unit
 
         Returns
@@ -498,11 +549,6 @@ class SingleMetric(MetricManager):
         metric.add_dimension(name="function_version", value=47)
 
         print(json.dumps(metric.serialize_metric_set(), indent=4))
-
-    Parameters
-    ----------
-    MetricManager : MetricManager
-        Inherits from `aws_lambda_powertools.metrics.base.MetricManager`
     """
 
     def add_metric(
@@ -538,7 +584,7 @@ def single_metric(
     value: float,
     resolution: MetricResolution | int = 60,
     namespace: str | None = None,
-    default_dimensions: Dict[str, str] | None = None,
+    default_dimensions: dict[str, str] | None = None,
 ) -> Generator[SingleMetric, None, None]:
     """Context manager to simplify creation of a single metric
 
@@ -576,6 +622,9 @@ def single_metric(
         Metric value
     namespace: str
         Namespace for metrics
+    default_dimensions: dict[str, str], optional
+        Metric dimensions as key=value that will always be present
+
 
     Yields
     -------
@@ -593,7 +642,7 @@ def single_metric(
     SchemaValidationError
         When metric object fails EMF schema validation
     """  # noqa: E501
-    metric_set: Dict | None = None
+    metric_set: dict | None = None
     try:
         metric: SingleMetric = SingleMetric(namespace=namespace)
         metric.add_metric(name=name, unit=unit, value=value, resolution=resolution)

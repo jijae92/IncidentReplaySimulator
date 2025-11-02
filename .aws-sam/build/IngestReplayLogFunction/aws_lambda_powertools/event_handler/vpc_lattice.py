@@ -1,11 +1,18 @@
-from typing import Callable, Dict, List, Optional, Pattern, Union
+from __future__ import annotations
 
-from aws_lambda_powertools.event_handler import CORSConfig
+from typing import TYPE_CHECKING, Pattern
+
 from aws_lambda_powertools.event_handler.api_gateway import (
     ApiGatewayResolver,
     ProxyEventType,
 )
-from aws_lambda_powertools.utilities.data_classes import VPCLatticeEvent, VPCLatticeEventV2
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from http import HTTPStatus
+
+    from aws_lambda_powertools.event_handler import CORSConfig
+    from aws_lambda_powertools.utilities.data_classes import VPCLatticeEvent, VPCLatticeEventV2
 
 
 class VPCLatticeResolver(ApiGatewayResolver):
@@ -44,14 +51,25 @@ class VPCLatticeResolver(ApiGatewayResolver):
 
     def __init__(
         self,
-        cors: Optional[CORSConfig] = None,
-        debug: Optional[bool] = None,
-        serializer: Optional[Callable[[Dict], str]] = None,
-        strip_prefixes: Optional[List[Union[str, Pattern]]] = None,
+        cors: CORSConfig | None = None,
+        debug: bool | None = None,
+        serializer: Callable[[dict], str] | None = None,
+        strip_prefixes: list[str | Pattern] | None = None,
         enable_validation: bool = False,
+        response_validation_error_http_code: HTTPStatus | int | None = None,
+        json_body_deserializer: Callable[[str], dict] | None = None,
     ):
         """Amazon VPC Lattice resolver"""
-        super().__init__(ProxyEventType.VPCLatticeEvent, cors, debug, serializer, strip_prefixes, enable_validation)
+        super().__init__(
+            ProxyEventType.VPCLatticeEvent,
+            cors,
+            debug,
+            serializer,
+            strip_prefixes,
+            enable_validation,
+            response_validation_error_http_code,
+            json_body_deserializer=json_body_deserializer,
+        )
 
     def _get_base_path(self) -> str:
         return ""
@@ -93,14 +111,25 @@ class VPCLatticeV2Resolver(ApiGatewayResolver):
 
     def __init__(
         self,
-        cors: Optional[CORSConfig] = None,
-        debug: Optional[bool] = None,
-        serializer: Optional[Callable[[Dict], str]] = None,
-        strip_prefixes: Optional[List[Union[str, Pattern]]] = None,
+        cors: CORSConfig | None = None,
+        debug: bool | None = None,
+        serializer: Callable[[dict], str] | None = None,
+        strip_prefixes: list[str | Pattern] | None = None,
         enable_validation: bool = False,
+        response_validation_error_http_code: HTTPStatus | int | None = None,
+        json_body_deserializer: Callable[[str], dict] | None = None,
     ):
         """Amazon VPC Lattice resolver"""
-        super().__init__(ProxyEventType.VPCLatticeEventV2, cors, debug, serializer, strip_prefixes, enable_validation)
+        super().__init__(
+            ProxyEventType.VPCLatticeEventV2,
+            cors,
+            debug,
+            serializer,
+            strip_prefixes,
+            enable_validation,
+            response_validation_error_http_code,
+            json_body_deserializer=json_body_deserializer,
+        )
 
     def _get_base_path(self) -> str:
         return ""

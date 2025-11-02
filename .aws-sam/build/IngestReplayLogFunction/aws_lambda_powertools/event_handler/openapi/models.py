@@ -1,16 +1,51 @@
+# ruff: noqa: FA100
 from enum import Enum
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, List, Literal, Optional, Set, Union
 
-from pydantic import AnyUrl, BaseModel, Field
+from pydantic import AnyUrl, BaseModel, ConfigDict, Field, model_validator
+from typing_extensions import Annotated
 
 from aws_lambda_powertools.event_handler.openapi.compat import model_rebuild
-from aws_lambda_powertools.event_handler.openapi.pydantic_loader import PYDANTIC_V2
-from aws_lambda_powertools.shared.types import Annotated, Literal
+from aws_lambda_powertools.event_handler.openapi.exceptions import SchemaValidationError
+
+MODEL_CONFIG_ALLOW = ConfigDict(extra="allow")
+MODEL_CONFIG_IGNORE = ConfigDict(extra="ignore")
 
 """
 The code defines Pydantic models for the various OpenAPI objects like OpenAPI, PathItem, Operation, Parameter etc.
 These models can be used to parse OpenAPI JSON/YAML files into Python objects, or generate OpenAPI from Python data.
 """
+
+
+class OpenAPIExtensions(BaseModel):
+    """
+    This class serves as a Pydantic proxy model to add OpenAPI extensions.
+
+    OpenAPI extensions are arbitrary fields, so we remove openapi_extensions when dumping
+    and add only the provided value in the schema.
+    """
+
+    openapi_extensions: Optional[Dict[str, Any]] = None
+
+    # If the 'openapi_extensions' field is present in the 'values' dictionary,
+    # And if the extension starts with x- (must respect the RFC)
+    # update the 'values' dictionary with the contents of 'openapi_extensions',
+    # and then remove the 'openapi_extensions' field from the 'values' dictionary
+    model_config = {"extra": "allow"}
+
+    @model_validator(mode="before")
+    def serialize_openapi_extension_v2(self):
+        if isinstance(self, dict) and self.get("openapi_extensions"):
+            openapi_extension_value = self.get("openapi_extensions")
+
+            for extension_key in openapi_extension_value:
+                if not str(extension_key).startswith("x-"):
+                    raise SchemaValidationError("An OpenAPI extension key must start with x-")
+
+            self.update(openapi_extension_value)
+            self.pop("openapi_extensions", None)
+
+        return self
 
 
 # https://swagger.io/specification/#contact-object
@@ -19,12 +54,7 @@ class Contact(BaseModel):
     url: Optional[AnyUrl] = None
     email: Optional[str] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 # https://swagger.io/specification/#license-object
@@ -33,32 +63,20 @@ class License(BaseModel):
     identifier: Optional[str] = None
     url: Optional[AnyUrl] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 # https://swagger.io/specification/#info-object
 class Info(BaseModel):
     title: str
-    summary: Optional[str] = None
     description: Optional[str] = None
     termsOfService: Optional[str] = None
     contact: Optional[Contact] = None
     license: Optional[License] = None  # noqa: A003
     version: str
+    summary: Optional[str] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_IGNORE
 
 
 # https://swagger.io/specification/#server-variable-object
@@ -67,28 +85,16 @@ class ServerVariable(BaseModel):
     default: str
     description: Optional[str] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 # https://swagger.io/specification/#server-object
-class Server(BaseModel):
+class Server(OpenAPIExtensions):
     url: Union[AnyUrl, str]
     description: Optional[str] = None
     variables: Optional[Dict[str, ServerVariable]] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 # https://swagger.io/specification/#reference-object
@@ -110,13 +116,7 @@ class XML(BaseModel):
     attribute: Optional[bool] = None
     wrapped: Optional[bool] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 # https://swagger.io/specification/#external-documentation-object
@@ -124,13 +124,7 @@ class ExternalDocumentation(BaseModel):
     description: Optional[str] = None
     url: AnyUrl
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 # https://swagger.io/specification/#schema-object
@@ -206,20 +200,14 @@ class Schema(BaseModel):
     deprecated: Optional[bool] = None
     readOnly: Optional[bool] = None
     writeOnly: Optional[bool] = None
-    examples: Optional[List["Example"]] = None
-    # Ref: OpenAPI 3.1.0: https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.1.0.md#schema-object
+    examples: Optional[List[Any]] = None
+    # Ref: OpenAPI 3.0.0: https://github.com/OAI/OpenAPI-Specification/blob/main/versions/3.0.0.md#schema-object
     # Schema Object
     discriminator: Optional[Discriminator] = None
     xml: Optional[XML] = None
     externalDocs: Optional[ExternalDocumentation] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 # Ref: https://json-schema.org/draft/2020-12/json-schema-core.html#name-json-schema-documents
@@ -234,13 +222,7 @@ class Example(BaseModel):
     value: Optional[Any] = None
     externalValue: Optional[AnyUrl] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 class ParameterInType(Enum):
@@ -258,13 +240,7 @@ class Encoding(BaseModel):
     explode: Optional[bool] = None
     allowReserved: Optional[bool] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 # https://swagger.io/specification/#media-type-object
@@ -273,13 +249,7 @@ class MediaType(BaseModel):
     examples: Optional[Dict[str, Union[Example, Reference]]] = None
     encoding: Optional[Dict[str, Encoding]] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 # https://swagger.io/specification/#parameter-object
@@ -296,13 +266,7 @@ class ParameterBase(BaseModel):
     # Serialization rules for more complex scenarios
     content: Optional[Dict[str, MediaType]] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 class Parameter(ParameterBase):
@@ -320,13 +284,7 @@ class RequestBody(BaseModel):
     content: Dict[str, MediaType]
     required: Optional[bool] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 # https://swagger.io/specification/#link-object
@@ -338,13 +296,7 @@ class Link(BaseModel):
     description: Optional[str] = None
     server: Optional[Server] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 # https://swagger.io/specification/#response-object
@@ -354,13 +306,7 @@ class Response(BaseModel):
     content: Optional[Dict[str, MediaType]] = None
     links: Optional[Dict[str, Union[Link, Reference]]] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 # https://swagger.io/specification/#tag-object
@@ -369,18 +315,12 @@ class Tag(BaseModel):
     description: Optional[str] = None
     externalDocs: Optional[ExternalDocumentation] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 # https://swagger.io/specification/#operation-object
-class Operation(BaseModel):
-    tags: Optional[List[Tag]] = None
+class Operation(OpenAPIExtensions):
+    tags: Optional[List[str]] = None
     summary: Optional[str] = None
     description: Optional[str] = None
     externalDocs: Optional[ExternalDocumentation] = None
@@ -394,13 +334,7 @@ class Operation(BaseModel):
     security: Optional[List[Dict[str, List[str]]]] = None
     servers: Optional[List[Server]] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 # https://swagger.io/specification/#path-item-object
@@ -419,13 +353,7 @@ class PathItem(BaseModel):
     servers: Optional[List[Server]] = None
     parameters: Optional[List[Union[Parameter, Reference]]] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 # https://swagger.io/specification/#security-scheme-object
@@ -434,19 +362,14 @@ class SecuritySchemeType(Enum):
     http = "http"
     oauth2 = "oauth2"
     openIdConnect = "openIdConnect"
+    mutualTLS = "mutualTLS"
 
 
-class SecurityBase(BaseModel):
+class SecurityBase(OpenAPIExtensions):
     type_: SecuritySchemeType = Field(alias="type")
     description: Optional[str] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = {"extra": "allow", "populate_by_name": True}
 
 
 class APIKeyIn(Enum):
@@ -466,7 +389,7 @@ class HTTPBase(SecurityBase):
     scheme: str
 
 
-class HTTPBearer(HTTPBase):
+class HTTPBearer(HTTPBase):  # type: ignore[override]
     scheme: Literal["bearer"] = "bearer"
     bearerFormat: Optional[str] = None
 
@@ -475,13 +398,7 @@ class OAuthFlow(BaseModel):
     refreshUrl: Optional[str] = None
     scopes: Dict[str, str] = {}
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 class OAuthFlowImplicit(OAuthFlow):
@@ -507,13 +424,7 @@ class OAuthFlows(BaseModel):
     clientCredentials: Optional[OAuthFlowClientCredentials] = None
     authorizationCode: Optional[OAuthFlowAuthorizationCode] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 class OAuth2(SecurityBase):
@@ -529,7 +440,11 @@ class OpenIdConnect(SecurityBase):
     openIdConnectUrl: str
 
 
-SecurityScheme = Union[APIKey, HTTPBase, OAuth2, OpenIdConnect, HTTPBearer]
+class MutualTLS(SecurityBase):
+    type_: SecuritySchemeType = Field(default=SecuritySchemeType.mutualTLS, alias="type")
+
+
+SecurityScheme = Union[APIKey, HTTPBase, OAuth2, OpenIdConnect, HTTPBearer, MutualTLS]
 
 
 # https://swagger.io/specification/#components-object
@@ -546,17 +461,11 @@ class Components(BaseModel):
     callbacks: Optional[Dict[str, Union[Dict[str, PathItem], Reference, Any]]] = None
     pathItems: Optional[Dict[str, Union[PathItem, Reference]]] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 # https://swagger.io/specification/#openapi-object
-class OpenAPI(BaseModel):
+class OpenAPI(OpenAPIExtensions):
     openapi: str
     info: Info
     jsonSchemaDialect: Optional[str] = None
@@ -569,13 +478,7 @@ class OpenAPI(BaseModel):
     tags: Optional[List[Tag]] = None
     externalDocs: Optional[ExternalDocumentation] = None
 
-    if PYDANTIC_V2:
-        model_config = {"extra": "allow"}
-
-    else:
-
-        class Config:
-            extra = "allow"
+    model_config = MODEL_CONFIG_ALLOW
 
 
 model_rebuild(Schema)

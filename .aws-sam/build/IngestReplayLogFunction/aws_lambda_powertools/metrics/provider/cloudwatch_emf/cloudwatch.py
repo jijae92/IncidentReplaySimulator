@@ -7,23 +7,36 @@ import numbers
 import os
 import warnings
 from collections import defaultdict
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any
 
 from aws_lambda_powertools.metrics.base import single_metric
 from aws_lambda_powertools.metrics.exceptions import MetricValueError, SchemaValidationError
 from aws_lambda_powertools.metrics.functions import (
+    convert_timestamp_to_emf_format,
     extract_cloudwatch_metric_resolution_value,
     extract_cloudwatch_metric_unit_value,
+    is_metrics_disabled,
+    resolve_cold_start_function_name,
+    validate_emf_timestamp,
 )
 from aws_lambda_powertools.metrics.provider.base import BaseProvider
-from aws_lambda_powertools.metrics.provider.cloudwatch_emf.constants import MAX_DIMENSIONS, MAX_METRICS
+from aws_lambda_powertools.metrics.provider.cloudwatch_emf.constants import (
+    MAX_DIMENSIONS,
+    MAX_METRIC_NAME_LENGTH,
+    MAX_METRICS,
+    MIN_METRIC_NAME_LENGTH,
+)
+from aws_lambda_powertools.metrics.provider.cloudwatch_emf.exceptions import MetricNameError
 from aws_lambda_powertools.metrics.provider.cloudwatch_emf.metric_properties import MetricResolution, MetricUnit
-from aws_lambda_powertools.metrics.provider.cloudwatch_emf.types import CloudWatchEMFOutput
-from aws_lambda_powertools.metrics.types import MetricNameUnitResolution
 from aws_lambda_powertools.shared import constants
 from aws_lambda_powertools.shared.functions import resolve_env_var_choice
-from aws_lambda_powertools.shared.types import AnyCallableT
-from aws_lambda_powertools.utilities.typing import LambdaContext
+from aws_lambda_powertools.warnings import PowertoolsUserWarning
+
+if TYPE_CHECKING:
+    from aws_lambda_powertools.metrics.provider.cloudwatch_emf.types import CloudWatchEMFOutput
+    from aws_lambda_powertools.metrics.types import MetricNameUnitResolution
+    from aws_lambda_powertools.shared.types import AnyCallableT
+    from aws_lambda_powertools.utilities.typing import LambdaContext
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +58,10 @@ class AmazonCloudWatchEMFProvider(BaseProvider):
         metric namespace to be set for all metrics
     POWERTOOLS_SERVICE_NAME : str
         service name used for default dimension
+    POWERTOOLS_METRICS_FUNCTION_NAME: str
+        function name used as dimension for the ColdStart metric
+    POWERTOOLS_METRICS_DISABLED: bool
+        disables all metrics emitted by Powertools
 
     Raises
     ------
@@ -60,19 +77,23 @@ class AmazonCloudWatchEMFProvider(BaseProvider):
 
     def __init__(
         self,
-        metric_set: Dict[str, Any] | None = None,
-        dimension_set: Dict | None = None,
+        metric_set: dict[str, Any] | None = None,
+        dimension_set: dict | None = None,
         namespace: str | None = None,
-        metadata_set: Dict[str, Any] | None = None,
+        metadata_set: dict[str, Any] | None = None,
         service: str | None = None,
-        default_dimensions: Dict[str, Any] | None = None,
+        default_dimensions: dict[str, Any] | None = None,
+        function_name: str | None = None,
     ):
         self.metric_set = metric_set if metric_set is not None else {}
         self.dimension_set = dimension_set if dimension_set is not None else {}
         self.default_dimensions = default_dimensions or {}
         self.namespace = resolve_env_var_choice(choice=namespace, env=os.getenv(constants.METRICS_NAMESPACE_ENV))
         self.service = resolve_env_var_choice(choice=service, env=os.getenv(constants.SERVICE_NAME_ENV))
+        self.function_name = function_name
+
         self.metadata_set = metadata_set if metadata_set is not None else {}
+        self.timestamp: int | None = None
 
         self._metric_units = [unit.value for unit in MetricUnit]
         self._metric_unit_valid_options = list(MetricUnit.__members__)
@@ -107,11 +128,11 @@ class AmazonCloudWatchEMFProvider(BaseProvider):
         ----------
         name : str
             Metric name
-        unit : Union[MetricUnit, str]
+        unit : MetricUnit | str
             `aws_lambda_powertools.helper.models.MetricUnit`
         value : float
             Metric value
-        resolution : Union[MetricResolution, int]
+        resolution : MetricResolution | int
             `aws_lambda_powertools.helper.models.MetricResolution`
 
         Raises
@@ -121,6 +142,12 @@ class AmazonCloudWatchEMFProvider(BaseProvider):
         MetricResolutionError
             When metric resolution is not supported by CloudWatch
         """
+
+        name = name.strip()
+        if len(name) < MIN_METRIC_NAME_LENGTH or len(name) > MAX_METRIC_NAME_LENGTH:
+            raise MetricNameError(
+                f"The metric name should be between {MIN_METRIC_NAME_LENGTH} and {MAX_METRIC_NAME_LENGTH} characters",
+            )
         if not isinstance(value, numbers.Number):
             raise MetricValueError(f"{value} is not a valid number")
 
@@ -133,7 +160,7 @@ class AmazonCloudWatchEMFProvider(BaseProvider):
             metric_resolutions=self._metric_resolutions,
             resolution=resolution,
         )
-        metric: Dict = self.metric_set.get(name, defaultdict(list))
+        metric: dict = self.metric_set.get(name, defaultdict(list))
         metric["Unit"] = unit
         metric["StorageResolution"] = resolution
         metric["Value"].append(float(value))
@@ -151,19 +178,19 @@ class AmazonCloudWatchEMFProvider(BaseProvider):
 
     def serialize_metric_set(
         self,
-        metrics: Dict | None = None,
-        dimensions: Dict | None = None,
-        metadata: Dict | None = None,
+        metrics: dict | None = None,
+        dimensions: dict | None = None,
+        metadata: dict | None = None,
     ) -> CloudWatchEMFOutput:
         """Serializes metric and dimensions set
 
         Parameters
         ----------
-        metrics : Dict, optional
+        metrics : dict, optional
             Dictionary of metrics to serialize, by default None
-        dimensions : Dict, optional
+        dimensions : dict, optional
             Dictionary of dimensions to serialize, by default None
-        metadata: Dict, optional
+        metadata: dict, optional
             Dictionary of metadata to serialize, by default None
 
         Example
@@ -176,7 +203,7 @@ class AmazonCloudWatchEMFProvider(BaseProvider):
 
         Returns
         -------
-        Dict
+        CloudWatchEMFOutput
             Serialized metrics following EMF specification
 
         Raises
@@ -210,8 +237,8 @@ class AmazonCloudWatchEMFProvider(BaseProvider):
         #
         # In case using high-resolution metrics, add StorageResolution field
         # Example: [ { "Name": "metric_name", "Unit": "Count", "StorageResolution": 1 } ] # noqa ERA001
-        metric_definition: List[MetricNameUnitResolution] = []
-        metric_names_and_values: Dict[str, float] = {}  # { "metric_name": 1.0 }
+        metric_definition: list[MetricNameUnitResolution] = []
+        metric_names_and_values: dict[str, float] = {}  # { "metric_name": 1.0 }
 
         for metric_name in metrics:
             metric: dict = metrics[metric_name]
@@ -231,7 +258,7 @@ class AmazonCloudWatchEMFProvider(BaseProvider):
 
         return {
             "_aws": {
-                "Timestamp": int(datetime.datetime.now().timestamp() * 1000),  # epoch
+                "Timestamp": self.timestamp or int(datetime.datetime.now().timestamp() * 1000),  # epoch
                 "CloudWatchMetrics": [
                     {
                         "Namespace": self.namespace,  # "test_namespace"
@@ -241,8 +268,8 @@ class AmazonCloudWatchEMFProvider(BaseProvider):
                 ],
             },
             # NOTE: Mypy doesn't recognize splats '** syntax' in TypedDict
-            **dimensions,  # type: ignore[misc] # "service": "test_service"
-            **metadata,  # "username": "test"
+            **dimensions,  # "service": "test_service"
+            **metadata,  # type: ignore[typeddict-item] # "username": "test"
             **metric_names_and_values,  # "single_metric": 1.0
         }
 
@@ -262,15 +289,32 @@ class AmazonCloudWatchEMFProvider(BaseProvider):
         value : str
             Dimension value
         """
+
         logger.debug(f"Adding dimension: {name}:{value}")
         if len(self.dimension_set) == MAX_DIMENSIONS:
             raise SchemaValidationError(
                 f"Maximum number of dimensions exceeded ({MAX_DIMENSIONS}): Unable to add dimension {name}.",
             )
-        # Cast value to str according to EMF spec
-        # Majority of values are expected to be string already, so
-        # checking before casting improves performance in most cases
-        self.dimension_set[name] = value if isinstance(value, str) else str(value)
+
+        value = value if isinstance(value, str) else str(value)
+
+        if not name.strip() or not value.strip():
+            warnings.warn(
+                f"The dimension {name} doesn't meet the requirements and won't be added. "
+                "Ensure the dimension name and value are non-empty strings",
+                category=PowertoolsUserWarning,
+                stacklevel=2,
+            )
+            return
+
+        if name in self.dimension_set or name in self.default_dimensions:
+            warnings.warn(
+                f"Dimension '{name}' has already been added. The previous value will be overwritten.",
+                category=PowertoolsUserWarning,
+                stacklevel=2,
+            )
+
+        self.dimension_set[name] = value
 
     def add_metadata(self, key: str, value: Any) -> None:
         """Adds high cardinal metadata for metrics object
@@ -279,7 +323,7 @@ class AmazonCloudWatchEMFProvider(BaseProvider):
         Instead, this will be searchable through logs.
 
         If you're looking to add metadata to filter metrics, then
-        use add_dimensions method.
+        use add_dimension method.
 
         Example
         -------
@@ -304,6 +348,31 @@ class AmazonCloudWatchEMFProvider(BaseProvider):
         else:
             self.metadata_set[str(key)] = value
 
+    def set_timestamp(self, timestamp: int | datetime.datetime):
+        """
+        Set the timestamp for the metric.
+
+        Parameters
+        -----------
+        timestamp: int | datetime.datetime
+            The timestamp to create the metric.
+            If an integer is provided, it is assumed to be the epoch time in milliseconds.
+            If a datetime object is provided, it will be converted to epoch time in milliseconds.
+        """
+        # The timestamp must be a Datetime object or an integer representing an epoch time.
+        # This should not exceed 14 days in the past or be more than 2 hours in the future.
+        # Any metrics failing to meet this criteria will be skipped by Amazon CloudWatch.
+        # See: https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/CloudWatch_Embedded_Metric_Format_Specification.html
+        # See: https://docs.aws.amazon.com/AmazonCloudWatch/latest/logs/CloudWatch-Logs-Monitoring-CloudWatch-Metrics.html
+        if not validate_emf_timestamp(timestamp):
+            warnings.warn(
+                "This metric doesn't meet the requirements and will be skipped by Amazon CloudWatch. "
+                "Ensure the timestamp is within 14 days past or 2 hours future.",
+                stacklevel=2,
+            )
+
+        self.timestamp = convert_timestamp_to_emf_format(timestamp)
+
     def clear_metrics(self) -> None:
         logger.debug("Clearing out existing metric set from memory")
         self.metric_set.clear()
@@ -327,7 +396,7 @@ class AmazonCloudWatchEMFProvider(BaseProvider):
                 "If application metrics should never be empty, consider using 'raise_on_empty_metrics'",
                 stacklevel=2,
             )
-        else:
+        elif not is_metrics_disabled():
             logger.debug("Flushing existing metrics")
             metrics = self.serialize_metric_set()
             print(json.dumps(metrics, separators=(",", ":")))
@@ -394,9 +463,11 @@ class AmazonCloudWatchEMFProvider(BaseProvider):
         context : Any
             Lambda context
         """
+
+        cold_start_function_name = resolve_cold_start_function_name(function_name=self.function_name, context=context)
         logger.debug("Adding cold start metric and function_name dimension")
         with single_metric(name="ColdStart", unit=MetricUnit.Count, value=1, namespace=self.namespace) as metric:
-            metric.add_dimension(name="function_name", value=context.function_name)
+            metric.add_dimension(name="function_name", value=cold_start_function_name)
             if self.service:
                 metric.add_dimension(name="service", value=str(self.service))
 
@@ -405,7 +476,7 @@ class AmazonCloudWatchEMFProvider(BaseProvider):
 
         Parameters
         ----------
-        dimensions : Dict[str, Any], optional
+        dimensions : dict[str, Any], optional
             metric dimensions as key=value
 
         Example

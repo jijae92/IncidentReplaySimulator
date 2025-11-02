@@ -1,9 +1,13 @@
-import logging
-from typing import Any, Dict, List, Optional, Type, Union
+from __future__ import annotations
 
-from ..models import SqsModel
-from ..types import Model
-from .base import BaseEnvelope
+import logging
+from typing import TYPE_CHECKING, Any
+
+from aws_lambda_powertools.utilities.parser.envelopes.base import BaseEnvelope
+from aws_lambda_powertools.utilities.parser.models import SqsModel
+
+if TYPE_CHECKING:
+    from aws_lambda_powertools.utilities.parser.types import Model
 
 logger = logging.getLogger(__name__)
 
@@ -15,25 +19,25 @@ class SqsEnvelope(BaseEnvelope):
     Regardless of its type it'll be parsed into a BaseModel object.
 
     Note: Records will be parsed the same way so if model is str,
-    all items in the list will be parsed as str and npt as JSON (and vice versa)
+    all items in the list will be parsed as str and not as JSON (and vice versa)
     """
 
-    def parse(self, data: Optional[Union[Dict[str, Any], Any]], model: Type[Model]) -> List[Optional[Model]]:
+    def parse(self, data: dict[str, Any] | Any | None, model: type[Model]) -> list[Model | None]:
         """Parses records found with model provided
 
         Parameters
         ----------
-        data : Dict
+        data : dict
             Lambda event to be parsed
-        model : Type[Model]
+        model : type[Model]
             Data model provided to parse after extracting data using envelope
 
         Returns
         -------
-        List
+        list
             List of records parsed with model provided
         """
         logger.debug(f"Parsing incoming data with SQS model {SqsModel}")
-        parsed_envelope = SqsModel.parse_obj(data)
+        parsed_envelope = SqsModel.model_validate(data)
         logger.debug(f"Parsing SQS records in `body` with {model}")
         return [self._parse(data=record.body, model=model) for record in parsed_envelope.Records]

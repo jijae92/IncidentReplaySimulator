@@ -1,63 +1,34 @@
 """
 Base for Parameter providers
+!!! abstract "Usage Documentation"
+    [`Parameters`](../../utilities/parameters.md)
 """
+
 from __future__ import annotations
 
-import base64
-import json
 import os
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from datetime import datetime, timedelta
-from typing import (
-    TYPE_CHECKING,
-    Any,
-    Callable,
-    Dict,
-    NamedTuple,
-    Optional,
-    Tuple,
-    Type,
-    Union,
-    cast,
-    overload,
-)
-
-import boto3
-from botocore.config import Config
+from typing import TYPE_CHECKING, Any, NamedTuple, cast, overload
 
 from aws_lambda_powertools.shared import constants, user_agent
 from aws_lambda_powertools.shared.functions import resolve_max_age
-from aws_lambda_powertools.utilities.parameters.types import TransformOptions
-
-from .exceptions import GetParameterError, TransformParameterError
+from aws_lambda_powertools.utilities.parameters.exceptions import GetParameterError, TransformParameterError
 
 if TYPE_CHECKING:
-    from mypy_boto3_appconfigdata import AppConfigDataClient
-    from mypy_boto3_dynamodb import DynamoDBServiceResource
-    from mypy_boto3_secretsmanager import SecretsManagerClient
-    from mypy_boto3_ssm import SSMClient
+    from aws_lambda_powertools.utilities.parameters.types import TransformOptions
 
 
-DEFAULT_MAX_AGE_SECS = "5"
-
-# These providers will be dynamically initialized on first use of the helper functions
-DEFAULT_PROVIDERS: Dict[str, Any] = {}
-TRANSFORM_METHOD_JSON = "json"
-TRANSFORM_METHOD_BINARY = "binary"
-SUPPORTED_TRANSFORM_METHODS = [TRANSFORM_METHOD_JSON, TRANSFORM_METHOD_BINARY]
-ParameterClients = Union["AppConfigDataClient", "SecretsManagerClient", "SSMClient"]
-
-TRANSFORM_METHOD_MAPPING = {
-    TRANSFORM_METHOD_JSON: json.loads,
-    TRANSFORM_METHOD_BINARY: base64.b64decode,
-    ".json": json.loads,
-    ".binary": base64.b64decode,
-    None: lambda x: x,
-}
+from aws_lambda_powertools.utilities.parameters.constants import (
+    DEFAULT_MAX_AGE_SECS,
+    DEFAULT_PROVIDERS,
+    TRANSFORM_METHOD_MAPPING,
+)
 
 
 class ExpirableValue(NamedTuple):
-    value: str | bytes | Dict[str, Any]
+    value: str | bytes | dict[str, Any]
     ttl: datetime
 
 
@@ -66,26 +37,30 @@ class BaseProvider(ABC):
     Abstract Base Class for Parameter providers
     """
 
-    store: Dict[Tuple, ExpirableValue]
+    store: dict[tuple, ExpirableValue]
 
-    def __init__(self):
+    def __init__(self, *, client=None, resource=None):
         """
         Initialize the base provider
         """
+        if client is not None:
+            user_agent.register_feature_to_client(client=client, feature="parameters")
+        if resource is not None:
+            user_agent.register_feature_to_resource(resource=resource, feature="parameters")
 
-        self.store: Dict[Tuple, ExpirableValue] = {}
+        self.store: dict[tuple, ExpirableValue] = {}
 
-    def has_not_expired_in_cache(self, key: Tuple) -> bool:
+    def has_not_expired_in_cache(self, key: tuple) -> bool:
         return key in self.store and self.store[key].ttl >= datetime.now()
 
     def get(
         self,
         name: str,
-        max_age: Optional[int] = None,
+        max_age: int | None = None,
         transform: TransformOptions = None,
         force_fetch: bool = False,
         **sdk_options,
-    ) -> Optional[Union[str, dict, bytes]]:
+    ) -> str | bytes | dict | None:
         """
         Retrieve a parameter value or return the cached value
 
@@ -122,7 +97,7 @@ class BaseProvider(ABC):
         # of supported transform is small and the probability that a given
         # parameter will always be used in a specific transform, this should be
         # an acceptable tradeoff.
-        value: Optional[Union[str, bytes, dict]] = None
+        value: str | bytes | dict | None = None
         key = self._build_cache_key(name=name, transform=transform)
 
         # If max_age is not set, resolve it from the environment variable, defaulting to DEFAULT_MAX_AGE_SECS
@@ -147,21 +122,27 @@ class BaseProvider(ABC):
         return value
 
     @abstractmethod
-    def _get(self, name: str, **sdk_options) -> Union[str, bytes, Dict[str, Any]]:
+    def _get(self, name: str, **sdk_options) -> str | bytes | dict[str, Any]:
         """
         Retrieve parameter value from the underlying parameter store
+        """
+        raise NotImplementedError()
+
+    def set(self, name: str, value: Any, *, overwrite: bool = False, **kwargs):
+        """
+        Set parameter value from the underlying parameter store
         """
         raise NotImplementedError()
 
     def get_multiple(
         self,
         path: str,
-        max_age: Optional[int] = None,
+        max_age: int | None = None,
         transform: TransformOptions = None,
         raise_on_transform_error: bool = False,
         force_fetch: bool = False,
         **sdk_options,
-    ) -> Union[Dict[str, str], Dict[str, dict], Dict[str, bytes]]:
+    ) -> dict[str, str] | dict[str, bytes] | dict[str, dict]:
         """
         Retrieve multiple parameters based on a path prefix
 
@@ -206,14 +187,16 @@ class BaseProvider(ABC):
             raise GetParameterError(str(exc))
 
         if transform:
-            values.update(transform_value(values, transform, raise_on_transform_error))
+            values.update(
+                transform_value(value=values, transform=transform, raise_on_transform_error=raise_on_transform_error),
+            )
 
         self.add_to_cache(key=key, value=values, max_age=max_age)
 
         return values
 
     @abstractmethod
-    def _get_multiple(self, path: str, **sdk_options) -> Dict[str, str]:
+    def _get_multiple(self, path: str, **sdk_options) -> dict[str, str]:
         """
         Retrieve multiple parameter values from the underlying parameter store
         """
@@ -222,10 +205,10 @@ class BaseProvider(ABC):
     def clear_cache(self):
         self.store.clear()
 
-    def fetch_from_cache(self, key: Tuple):
+    def fetch_from_cache(self, key: tuple):
         return self.store[key].value if key in self.store else {}
 
-    def add_to_cache(self, key: Tuple, value: Any, max_age: int):
+    def add_to_cache(self, key: tuple, value: Any, max_age: int):
         if max_age <= 0:
             return
 
@@ -250,82 +233,10 @@ class BaseProvider(ABC):
 
         Returns
         -------
-        Tuple[str, TransformOptions, bool]
+        tuple[str, TransformOptions, bool]
             Cache key
         """
         return (name, transform, is_nested)
-
-    @staticmethod
-    def _build_boto3_client(
-        service_name: str,
-        client: Optional[ParameterClients] = None,
-        session: Optional[Type[boto3.Session]] = None,
-        config: Optional[Type[Config]] = None,
-    ) -> Type[ParameterClients]:
-        """Builds a low level boto3 client with session and config provided
-
-        Parameters
-        ----------
-        service_name : str
-            AWS service name to instantiate a boto3 client, e.g. ssm
-        client : Optional[ParameterClients], optional
-            boto3 client instance, by default None
-        session : Optional[Type[boto3.Session]], optional
-            boto3 session instance, by default None
-        config : Optional[Type[Config]], optional
-            botocore config instance to configure client with, by default None
-
-        Returns
-        -------
-        Type[ParameterClients]
-            Instance of a boto3 client for Parameters feature (e.g., ssm, appconfig, secretsmanager, etc.)
-        """
-        if client is not None:
-            user_agent.register_feature_to_client(client=client, feature="parameters")
-            return client
-
-        session = session or boto3.Session()
-        config = config or Config()
-        client = session.client(service_name=service_name, config=config)
-        user_agent.register_feature_to_client(client=client, feature="parameters")
-        return client
-
-    # maintenance: change DynamoDBServiceResource type to ParameterResourceClients when we expand
-    @staticmethod
-    def _build_boto3_resource_client(
-        service_name: str,
-        client: Optional["DynamoDBServiceResource"] = None,
-        session: Optional[Type[boto3.Session]] = None,
-        config: Optional[Type[Config]] = None,
-        endpoint_url: Optional[str] = None,
-    ) -> "DynamoDBServiceResource":
-        """Builds a high level boto3 resource client with session, config and endpoint_url provided
-
-        Parameters
-        ----------
-        service_name : str
-            AWS service name to instantiate a boto3 client, e.g. ssm
-        client : Optional[DynamoDBServiceResource], optional
-            boto3 client instance, by default None
-        session : Optional[Type[boto3.Session]], optional
-            boto3 session instance, by default None
-        config : Optional[Type[Config]], optional
-            botocore config instance to configure client, by default None
-
-        Returns
-        -------
-        Type[DynamoDBServiceResource]
-            Instance of a boto3 resource client for Parameters feature (e.g., dynamodb, etc.)
-        """
-        if client is not None:
-            user_agent.register_feature_to_resource(resource=client, feature="parameters")
-            return client
-
-        session = session or boto3.Session()
-        config = config or Config()
-        client = session.resource(service_name=service_name, config=config, endpoint_url=endpoint_url)
-        user_agent.register_feature_to_resource(resource=client, feature="parameters")
-        return client
 
 
 def get_transform_method(value: str, transform: TransformOptions = None) -> Callable[..., Any]:
@@ -368,30 +279,28 @@ def get_transform_method(value: str, transform: TransformOptions = None) -> Call
 
 @overload
 def transform_value(
-    value: Dict[str, Any],
+    value: dict[str, Any],
     transform: TransformOptions,
     raise_on_transform_error: bool = False,
     key: str = "",
-) -> Dict[str, Any]:
-    ...
+) -> dict[str, Any]: ...
 
 
 @overload
 def transform_value(
-    value: Union[str, bytes, Dict[str, Any]],
+    value: str | bytes | dict[str, Any],
     transform: TransformOptions,
     raise_on_transform_error: bool = False,
     key: str = "",
-) -> Optional[Union[str, bytes, Dict[str, Any]]]:
-    ...
+) -> str | bytes | dict[str, Any] | None: ...
 
 
 def transform_value(
-    value: Union[str, bytes, Dict[str, Any]],
+    value: str | bytes | dict[str, Any],
     transform: TransformOptions,
     raise_on_transform_error: bool = True,
     key: str = "",
-) -> Optional[Union[str, bytes, Dict[str, Any]]]:
+) -> str | bytes | dict[str, Any] | None:
     """
     Transform a value using one of the available options.
 
@@ -424,7 +333,7 @@ def transform_value(
         # where one of the keys might fail during transform, e.g. `{"a": "valid", "b": "{"}`
         # expected: `{"a": "valid", "b": None}`
 
-        transformed_values: Dict[str, Any] = {}
+        transformed_values: dict[str, Any] = {}
         for dict_key, dict_value in value.items():
             transform_method = get_transform_method(value=dict_key, transform=transform)
             try:

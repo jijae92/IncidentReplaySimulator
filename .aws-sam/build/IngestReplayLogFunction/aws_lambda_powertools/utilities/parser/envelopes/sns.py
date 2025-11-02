@@ -1,9 +1,13 @@
-import logging
-from typing import Any, Dict, List, Optional, Type, Union, cast
+from __future__ import annotations
 
-from ..models import SnsModel, SnsNotificationModel, SqsModel
-from ..types import Model
-from .base import BaseEnvelope
+import logging
+from typing import TYPE_CHECKING, Any, cast
+
+from aws_lambda_powertools.utilities.parser.envelopes.base import BaseEnvelope
+from aws_lambda_powertools.utilities.parser.models import SnsModel, SnsNotificationModel, SqsModel
+
+if TYPE_CHECKING:
+    from aws_lambda_powertools.utilities.parser.types import Model
 
 logger = logging.getLogger(__name__)
 
@@ -18,23 +22,23 @@ class SnsEnvelope(BaseEnvelope):
     all items in the list will be parsed as str and npt as JSON (and vice versa)
     """
 
-    def parse(self, data: Optional[Union[Dict[str, Any], Any]], model: Type[Model]) -> List[Optional[Model]]:
+    def parse(self, data: dict[str, Any] | Any | None, model: type[Model]) -> list[Model | None]:
         """Parses records found with model provided
 
         Parameters
         ----------
-        data : Dict
+        data : dict
             Lambda event to be parsed
-        model : Type[Model]
+        model : type[Model]
             Data model provided to parse after extracting data using envelope
 
         Returns
         -------
-        List
+        list
             List of records parsed with model provided
         """
         logger.debug(f"Parsing incoming data with SNS model {SnsModel}")
-        parsed_envelope = SnsModel.parse_obj(data)
+        parsed_envelope = SnsModel.model_validate(data)
         logger.debug(f"Parsing SNS records in `body` with {model}")
         return [self._parse(data=record.Sns.Message, model=model) for record in parsed_envelope.Records]
 
@@ -50,27 +54,27 @@ class SnsSqsEnvelope(BaseEnvelope):
     3. Finally, parse provided model against payload extracted
     """
 
-    def parse(self, data: Optional[Union[Dict[str, Any], Any]], model: Type[Model]) -> List[Optional[Model]]:
+    def parse(self, data: dict[str, Any] | Any | None, model: type[Model]) -> list[Model | None]:
         """Parses records found with model provided
 
         Parameters
         ----------
-        data : Dict
+        data : dict
             Lambda event to be parsed
-        model : Type[Model]
+        model : type[Model]
             Data model provided to parse after extracting data using envelope
 
         Returns
         -------
-        List
+        list
             List of records parsed with model provided
         """
         logger.debug(f"Parsing incoming data with SQS model {SqsModel}")
-        parsed_envelope = SqsModel.parse_obj(data)
+        parsed_envelope = SqsModel.model_validate(data)
         output = []
         for record in parsed_envelope.Records:
             # We allow either AWS expected contract (str) or a custom Model, see #943
             body = cast(str, record.body)
-            sns_notification = SnsNotificationModel.parse_raw(body)
+            sns_notification = SnsNotificationModel.model_validate_json(body)
             output.append(self._parse(data=sns_notification.Message, model=model))
         return output

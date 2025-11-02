@@ -1,4 +1,7 @@
-from typing import Dict, List, Optional
+from __future__ import annotations
+
+from functools import cached_property
+from typing import Any
 
 from aws_lambda_powertools.utilities.data_classes.common import BaseProxyEvent, DictWrapper
 
@@ -37,13 +40,13 @@ class BedrockAgentProperty(DictWrapper):
 
 class BedrockAgentRequestMedia(DictWrapper):
     @property
-    def properties(self) -> List[BedrockAgentProperty]:
+    def properties(self) -> list[BedrockAgentProperty]:
         return [BedrockAgentProperty(x) for x in self["properties"]]
 
 
 class BedrockAgentRequestBody(DictWrapper):
     @property
-    def content(self) -> Dict[str, BedrockAgentRequestMedia]:
+    def content(self) -> dict[str, BedrockAgentRequestMedia]:
         return {k: BedrockAgentRequestMedia(v) for k, v in self["content"].items()}
 
 
@@ -53,6 +56,8 @@ class BedrockAgentEvent(BaseProxyEvent):
 
     See https://docs.aws.amazon.com/bedrock/latest/userguide/agents-create.html
     """
+
+    # httpMethod is inherited from BaseProxyEvent class.
 
     @property
     def message_version(self) -> str:
@@ -75,15 +80,12 @@ class BedrockAgentEvent(BaseProxyEvent):
         return self["apiPath"]
 
     @property
-    def http_method(self) -> str:
-        return self["httpMethod"]
+    def parameters(self) -> list[BedrockAgentProperty]:
+        parameters = self.get("parameters") or []
+        return [BedrockAgentProperty(x) for x in parameters]
 
     @property
-    def parameters(self) -> Optional[List[BedrockAgentProperty]]:
-        return [BedrockAgentProperty(x) for x in self["parameters"]] if self.get("parameters") else None
-
-    @property
-    def request_body(self) -> Optional[BedrockAgentRequestBody]:
+    def request_body(self) -> BedrockAgentRequestBody | None:
         return BedrockAgentRequestBody(self["requestBody"]) if self.get("requestBody") else None
 
     @property
@@ -91,11 +93,11 @@ class BedrockAgentEvent(BaseProxyEvent):
         return BedrockAgentInfo(self["agent"])
 
     @property
-    def session_attributes(self) -> Dict[str, str]:
+    def session_attributes(self) -> dict[str, str]:
         return self["sessionAttributes"]
 
     @property
-    def prompt_session_attributes(self) -> Dict[str, str]:
+    def prompt_session_attributes(self) -> dict[str, str]:
         return self["promptSessionAttributes"]
 
     # The following methods add compatibility with BaseProxyEvent
@@ -103,8 +105,39 @@ class BedrockAgentEvent(BaseProxyEvent):
     def path(self) -> str:
         return self["apiPath"]
 
-    @property
-    def query_string_parameters(self) -> Optional[Dict[str, str]]:
+    @cached_property
+    def query_string_parameters(self) -> dict[str, str]:
         # In Bedrock Agent events, query string parameters are passed as undifferentiated parameters,
         # together with the other parameters. So we just return all parameters here.
-        return {x["name"]: x["value"] for x in self["parameters"]} if self.get("parameters") else None
+        parameters = self.get("parameters") or []
+        return {x["name"]: x["value"] for x in parameters}
+
+    @property
+    def resolved_query_string_parameters(self) -> dict[str, list[str]]:
+        """
+        Override the base implementation to prevent splitting parameter values by commas.
+
+        For Bedrock Agent events, parameters are already properly structured and should not
+        be split by commas as they might contain commas as part of their actual values
+        (e.g., SQL queries).
+        """
+        # Return each parameter value as a single-item list without splitting by commas
+        parameters = self.get("parameters") or []
+        return {x["name"]: [x["value"]] for x in parameters}
+
+    @property
+    def resolved_headers_field(self) -> dict[str, Any]:
+        return {}
+
+    @cached_property
+    def json_body(self) -> Any:
+        # In Bedrock Agent events, body parameters are encoded differently
+        # @see https://docs.aws.amazon.com/bedrock/latest/userguide/agents-lambda.html#agents-lambda-input
+        if not self.request_body:
+            return None
+
+        json_body = self.request_body.content.get("application/json")
+        if not json_body:
+            return None
+
+        return {x.name: x.value for x in json_body.properties}

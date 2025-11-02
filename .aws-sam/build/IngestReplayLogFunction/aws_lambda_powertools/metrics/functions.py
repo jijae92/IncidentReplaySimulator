@@ -1,19 +1,27 @@
 from __future__ import annotations
 
+import os
+from datetime import datetime
+from typing import TYPE_CHECKING
+
 from aws_lambda_powertools.metrics.provider.cloudwatch_emf.exceptions import (
     MetricResolutionError,
     MetricUnitError,
 )
 from aws_lambda_powertools.metrics.provider.cloudwatch_emf.metric_properties import MetricResolution, MetricUnit
-from aws_lambda_powertools.shared.types import List
+from aws_lambda_powertools.shared import constants
+from aws_lambda_powertools.shared.functions import strtobool
+
+if TYPE_CHECKING:
+    from aws_lambda_powertools.utilities.typing.lambda_context import LambdaContext
 
 
-def extract_cloudwatch_metric_resolution_value(metric_resolutions: List, resolution: int | MetricResolution) -> int:
+def extract_cloudwatch_metric_resolution_value(metric_resolutions: list, resolution: int | MetricResolution) -> int:
     """Return metric value from CloudWatch metric unit whether that's str or MetricResolution enum
 
     Parameters
     ----------
-    unit : Union[int, MetricResolution]
+    resolution : int | MetricResolution
         Metric resolution
 
     Returns
@@ -37,12 +45,12 @@ def extract_cloudwatch_metric_resolution_value(metric_resolutions: List, resolut
     )
 
 
-def extract_cloudwatch_metric_unit_value(metric_units: List, metric_valid_options: List, unit: str | MetricUnit) -> str:
+def extract_cloudwatch_metric_unit_value(metric_units: list, metric_valid_options: list, unit: str | MetricUnit) -> str:
     """Return metric value from CloudWatch metric unit whether that's str or MetricUnit enum
 
     Parameters
     ----------
-    unit : Union[str, MetricUnit]
+    unit : str | MetricUnit
         Metric unit
 
     Returns
@@ -69,3 +77,125 @@ def extract_cloudwatch_metric_unit_value(metric_units: List, metric_valid_option
         unit = unit.value
 
     return unit
+
+
+def validate_emf_timestamp(timestamp: int | datetime) -> bool:
+    """
+    Validates a given timestamp based on CloudWatch Timestamp guidelines.
+
+    Timestamp must meet CloudWatch requirements, otherwise an InvalidTimestampError will be raised.
+    See [Timestamps](https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cloudwatch_concepts.html#about_timestamp)
+    for valid values.
+
+    Parameters:
+    ----------
+    timestamp: int | datetime
+        Datetime object or epoch time in milliseconds representing the timestamp to validate.
+
+    Returns
+    -------
+    bool
+        Valid or not timestamp values
+    """
+
+    if not isinstance(timestamp, (int, datetime)):
+        return False
+
+    if isinstance(timestamp, datetime):
+        # Converting timestamp to epoch time in milliseconds
+        timestamp = int(timestamp.timestamp() * 1000)
+
+    # Consider current timezone when working with date and time
+    current_timezone = datetime.now().astimezone().tzinfo
+
+    current_time = int(datetime.now(current_timezone).timestamp() * 1000)
+    min_valid_timestamp = current_time - constants.EMF_MAX_TIMESTAMP_PAST_AGE
+    max_valid_timestamp = current_time + constants.EMF_MAX_TIMESTAMP_FUTURE_AGE
+
+    return min_valid_timestamp <= timestamp <= max_valid_timestamp
+
+
+def convert_timestamp_to_emf_format(timestamp: int | datetime) -> int:
+    """
+    Converts a timestamp to EMF compatible format.
+
+    Parameters
+    ----------
+    timestamp: int | datetime
+        The timestamp to convert. If already in epoch milliseconds format, returns it as is.
+        If datetime object, converts it to milliseconds since Unix epoch.
+
+    Returns:
+    --------
+    int
+        The timestamp converted to EMF compatible format (milliseconds since Unix epoch).
+    """
+    if isinstance(timestamp, int):
+        return timestamp
+
+    try:
+        return int(round(timestamp.timestamp() * 1000))
+    except AttributeError:
+        # If this point is reached, it indicates timestamp is not a datetime object
+        # Returning zero represents the initial date of epoch time,
+        # which will be skipped by Amazon CloudWatch.
+        return 0
+
+
+def is_metrics_disabled() -> bool:
+    """
+    Determine if metrics should be disabled based on environment variables.
+
+    Returns:
+        bool: True if metrics are disabled, False otherwise.
+
+    Rules:
+    - If POWERTOOLS_DEV is True and POWERTOOLS_METRICS_DISABLED is True: Disable metrics
+    - If POWERTOOLS_METRICS_DISABLED is True: Disable metrics
+    - If POWERTOOLS_DEV is True and POWERTOOLS_METRICS_DISABLED is not set: Disable metrics
+    """
+
+    is_dev_mode = strtobool(os.getenv(constants.POWERTOOLS_DEV_ENV, "false"))
+    is_metrics_disabled = strtobool(os.getenv(constants.METRICS_DISABLED_ENV, "false"))
+
+    disable_conditions = [
+        is_metrics_disabled,
+        is_metrics_disabled and is_dev_mode,
+        is_dev_mode and os.getenv(constants.METRICS_DISABLED_ENV) is None,
+    ]
+
+    return any(disable_conditions)
+
+
+def resolve_cold_start_function_name(function_name: str | None, context: LambdaContext) -> str:
+    """
+    Resolve the function name for ColdStart metrics with a prioritized approach.
+
+    Parameters
+    ----------
+    function_name : str, optional
+        Explicitly provided function name (highest priority).
+    context : LambdaContext
+        AWS Lambda context object.
+
+    Returns
+    -------
+    str
+        Resolved function name.
+
+    Notes
+    -----
+    Function name resolution follows this priority:
+    1. Explicitly provided function_name
+    2. Environment variable POWERTOOLS_METRICS_FUNCTION_NAME
+    3. Lambda context function name
+    """
+
+    if function_name:
+        return function_name
+
+    metrics_function_name_env = os.getenv(constants.METRICS_FUNCTION_NAME_ENV)
+    if metrics_function_name_env:
+        return metrics_function_name_env
+
+    return context.function_name

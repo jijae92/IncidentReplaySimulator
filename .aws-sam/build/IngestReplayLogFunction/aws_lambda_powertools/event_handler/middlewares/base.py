@@ -1,9 +1,12 @@
-from abc import ABC, abstractmethod
-from typing import Generic
+from __future__ import annotations
 
-from aws_lambda_powertools.event_handler.api_gateway import Response
+from abc import ABC, abstractmethod
+from typing import TYPE_CHECKING, Generic, Protocol
+
 from aws_lambda_powertools.event_handler.types import EventHandlerInstance
-from aws_lambda_powertools.shared.types import Protocol
+
+if TYPE_CHECKING:
+    from aws_lambda_powertools.event_handler.api_gateway import Response
 
 
 class NextMiddleware(Protocol):
@@ -16,14 +19,14 @@ class NextMiddleware(Protocol):
         ...
 
 
-class BaseMiddlewareHandler(Generic[EventHandlerInstance], ABC):
+class BaseMiddlewareHandler(ABC, Generic[EventHandlerInstance]):
     """Base implementation for Middlewares to run code before and after in a chain.
 
 
     This is the middleware handler function where middleware logic is implemented.
     The next middleware handler is represented by `next_middleware`, returning a Response object.
 
-    Examples
+    Example
     --------
 
     **Correlation ID Middleware**
@@ -47,10 +50,7 @@ class BaseMiddlewareHandler(Generic[EventHandlerInstance], ABC):
         def handler(self, app: APIGatewayRestResolver, next_middleware: NextMiddleware) -> Response:
             # BEFORE logic
             request_id = app.current_event.request_context.request_id
-            correlation_id = app.current_event.get_header_value(
-                name=self.header,
-                default_value=request_id,
-            )
+            correlation_id = app.current_event.headers.get(self.header, request_id)
 
             # Call next middleware or route handler ('/todos')
             response = next_middleware(app)

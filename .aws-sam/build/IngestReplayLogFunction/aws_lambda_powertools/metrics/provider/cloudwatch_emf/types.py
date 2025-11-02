@@ -1,4 +1,9 @@
-from aws_lambda_powertools.shared.types import List, NotRequired, TypedDict
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, TypedDict
+
+if TYPE_CHECKING:
+    from typing_extensions import NotRequired
 
 
 class CloudWatchEMFMetric(TypedDict):
@@ -9,13 +14,13 @@ class CloudWatchEMFMetric(TypedDict):
 
 class CloudWatchEMFMetrics(TypedDict):
     Namespace: str
-    Dimensions: List[List[str]]  # [ [ 'test_dimension' ] ]
-    Metrics: List[CloudWatchEMFMetric]
+    Dimensions: list[list[str]]  # [ [ 'test_dimension' ] ]
+    Metrics: list[CloudWatchEMFMetric]
 
 
 class CloudWatchEMFRoot(TypedDict):
     Timestamp: int
-    CloudWatchMetrics: List[CloudWatchEMFMetrics]
+    CloudWatchMetrics: list[CloudWatchEMFMetrics]
 
 
 class CloudWatchEMFOutput(TypedDict):

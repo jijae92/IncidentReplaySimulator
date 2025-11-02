@@ -1,12 +1,15 @@
+from __future__ import annotations
+
 from datetime import datetime, tzinfo
-from typing import Any, Dict, Optional
+from typing import Any
 
 from dateutil.tz import gettz
 
-from .schema import HOUR_MIN_SEPARATOR, ModuloRangeValues, TimeValues
+from aws_lambda_powertools.utilities.feature_flags.constants import HOUR_MIN_SEPARATOR
+from aws_lambda_powertools.utilities.feature_flags.schema import ModuloRangeValues, TimeValues
 
 
-def _get_now_from_timezone(timezone: Optional[tzinfo]) -> datetime:
+def _get_now_from_timezone(timezone: tzinfo | None) -> datetime:
     """
     Returns now in the specified timezone. Defaults to UTC if not present.
     At this stage, we already validated that the passed timezone string is valid, so we assume that
@@ -16,7 +19,7 @@ def _get_now_from_timezone(timezone: Optional[tzinfo]) -> datetime:
     return datetime.now(timezone)
 
 
-def compare_days_of_week(context_value: Any, condition_value: Dict) -> bool:
+def compare_days_of_week(context_value: Any, condition_value: dict) -> bool:
     timezone_name = condition_value.get(TimeValues.TIMEZONE.value, "UTC")
 
     # %A = Weekday as locale’s full name.
@@ -26,7 +29,7 @@ def compare_days_of_week(context_value: Any, condition_value: Dict) -> bool:
     return current_day in days
 
 
-def compare_datetime_range(context_value: Any, condition_value: Dict) -> bool:
+def compare_datetime_range(context_value: Any, condition_value: dict) -> bool:
     timezone_name = condition_value.get(TimeValues.TIMEZONE.value, "UTC")
     timezone = gettz(timezone_name)
     current_time: datetime = _get_now_from_timezone(timezone)
@@ -42,7 +45,7 @@ def compare_datetime_range(context_value: Any, condition_value: Dict) -> bool:
     return start_date <= current_time <= end_date
 
 
-def compare_time_range(context_value: Any, condition_value: Dict) -> bool:
+def compare_time_range(context_value: Any, condition_value: dict) -> bool:
     timezone_name = condition_value.get(TimeValues.TIMEZONE.value, "UTC")
     current_time: datetime = _get_now_from_timezone(gettz(timezone_name))
 
@@ -53,6 +56,8 @@ def compare_time_range(context_value: Any, condition_value: Dict) -> bool:
     end_time = current_time.replace(hour=int(end_hour), minute=int(end_min))
 
     if int(end_hour) < int(start_hour):
+        # In normal circumstances, we need to assert **both** conditions
+        """
         # When the end hour is smaller than start hour, it means we are crossing a day's boundary.
         # In this case we need to assert that current_time is **either** on one side or the other side of the boundary
         #
@@ -66,14 +71,13 @@ def compare_time_range(context_value: Any, condition_value: Dict) -> bool:
         #                                             │ │                                        │
         #    └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─  │ └ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─ ─
         #                                               │
-
+        """
         return (start_time <= current_time) or (current_time <= end_time)
     else:
-        # In normal circumstances, we need to assert **both** conditions
         return start_time <= current_time <= end_time
 
 
-def compare_modulo_range(context_value: int, condition_value: Dict) -> bool:
+def compare_modulo_range(context_value: int, condition_value: dict) -> bool:
     """
     Returns for a given context 'a' and modulo condition 'b' -> b.start <= a % b.base <= b.end
     """
@@ -82,3 +86,66 @@ def compare_modulo_range(context_value: int, condition_value: Dict) -> bool:
     end = condition_value.get(ModuloRangeValues.END.value, 1)
 
     return start <= context_value % base <= end
+
+
+def compare_any_in_list(context_value: list, condition_value: list) -> bool:
+    """Comparator for ANY_IN_VALUE action
+
+    Parameters
+    ----------
+    context_value : list
+        user-defined context for flag evaluation
+    condition_value : list
+        schema value available for condition being evaluated
+
+    Returns
+    -------
+    bool
+        Whether any list item in context_value is available in condition_value
+    """
+    if not isinstance(context_value, list):
+        raise ValueError("Context provided must be a list. Unable to compare ANY_IN_VALUE action.")
+
+    return any(key in condition_value for key in context_value)
+
+
+def compare_all_in_list(context_value: list, condition_value: list) -> bool:
+    """Comparator for ALL_IN_VALUE action
+
+    Parameters
+    ----------
+    context_value : list
+        user-defined context for flag evaluation
+    condition_value : list
+        schema value available for condition being evaluated
+
+    Returns
+    -------
+    bool
+        Whether all list items in context_value are available in condition_value
+    """
+    if not isinstance(context_value, list):
+        raise ValueError("Context provided must be a list. Unable to compare ALL_IN_VALUE action.")
+
+    return all(key in condition_value for key in context_value)
+
+
+def compare_none_in_list(context_value: list, condition_value: list) -> bool:
+    """Comparator for NONE_IN_VALUE action
+
+    Parameters
+    ----------
+    context_value : list
+        user-defined context for flag evaluation
+    condition_value : list
+        schema value available for condition being evaluated
+
+    Returns
+    -------
+    bool
+        Whether list items in context_value are **not** available in condition_value
+    """
+    if not isinstance(context_value, list):
+        raise ValueError("Context provided must be a list. Unable to compare NONE_IN_VALUE action.")
+
+    return all(key not in condition_value for key in context_value)

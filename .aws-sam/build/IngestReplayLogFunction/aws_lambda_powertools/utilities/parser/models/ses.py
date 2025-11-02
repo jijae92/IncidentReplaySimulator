@@ -1,10 +1,8 @@
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from pydantic import BaseModel, Field
 from pydantic.types import PositiveInt
-
-from ..types import Literal
 
 
 class SesReceiptVerdict(BaseModel):
@@ -34,7 +32,7 @@ class SesMailHeaders(BaseModel):
 
 
 class SesMailCommonHeaders(BaseModel):
-    header_from: List[str] = Field(None, alias="from")
+    header_from: List[str] = Field(..., alias="from")
     to: List[str]
     cc: Optional[List[str]] = None
     bcc: Optional[List[str]] = None

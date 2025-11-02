@@ -1,7 +1,13 @@
-from typing import Any, Dict, Iterator, Optional
+from __future__ import annotations
+
+from functools import cached_property
+from typing import TYPE_CHECKING, Any
 
 from aws_lambda_powertools.utilities.data_classes.common import DictWrapper
 from aws_lambda_powertools.utilities.data_classes.shared_functions import base64_decode
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 
 class ActiveMQMessage(DictWrapper):
@@ -23,12 +29,9 @@ class ActiveMQMessage(DictWrapper):
         """Decodes the data as a str"""
         return base64_decode(self.data)
 
-    @property
+    @cached_property
     def json_data(self) -> Any:
-        """Parses the data as json"""
-        if self._json_data is None:
-            self._json_data = self._json_deserializer(self.decoded_data)
-        return self._json_data
+        return self._json_deserializer(self.decoded_data)
 
     @property
     def connection_id(self) -> str:
@@ -61,35 +64,35 @@ class ActiveMQMessage(DictWrapper):
 
     @property
     def destination_physicalname(self) -> str:
-        return self["destination"]["physicalname"]
+        return self["destination"]["physicalName"]
 
     @property
-    def delivery_mode(self) -> Optional[int]:
+    def delivery_mode(self) -> int | None:
         """persistent or non-persistent delivery"""
         return self.get("deliveryMode")
 
     @property
-    def correlation_id(self) -> Optional[str]:
+    def correlation_id(self) -> str | None:
         """User defined correlation id"""
         return self.get("correlationID")
 
     @property
-    def reply_to(self) -> Optional[str]:
+    def reply_to(self) -> str | None:
         """User defined reply to"""
         return self.get("replyTo")
 
     @property
-    def get_type(self) -> Optional[str]:
+    def get_type(self) -> str | None:
         """User defined message type"""
         return self.get("type")
 
     @property
-    def expiration(self) -> Optional[int]:
+    def expiration(self) -> int | None:
         """Expiration attribute whose value is given in milliseconds"""
         return self.get("expiration")
 
     @property
-    def priority(self) -> Optional[int]:
+    def priority(self) -> int | None:
         """
         JMS defines a ten-level priority value, with 0 as the lowest priority and 9
         as the highest. In addition, clients should consider priorities 0-4 as
@@ -112,9 +115,9 @@ class ActiveMQEvent(DictWrapper):
     - https://aws.amazon.com/blogs/compute/using-amazon-mq-as-an-event-source-for-aws-lambda/
     """
 
-    def __init__(self, data: Dict[str, Any]):
+    def __init__(self, data: dict[str, Any]):
         super().__init__(data)
-        self._messages: Optional[Iterator[ActiveMQMessage]] = None
+        self._messages: Iterator[ActiveMQMessage] | None = None
 
     @property
     def event_source(self) -> str:

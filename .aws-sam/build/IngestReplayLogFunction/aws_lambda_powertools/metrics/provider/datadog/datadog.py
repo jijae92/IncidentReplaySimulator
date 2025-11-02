@@ -7,15 +7,18 @@ import os
 import re
 import time
 import warnings
-from typing import Any, Dict, List
+from typing import TYPE_CHECKING, Any
 
 from aws_lambda_powertools.metrics.exceptions import MetricValueError, SchemaValidationError
+from aws_lambda_powertools.metrics.functions import is_metrics_disabled, resolve_cold_start_function_name
 from aws_lambda_powertools.metrics.provider import BaseProvider
 from aws_lambda_powertools.metrics.provider.datadog.warnings import DatadogDataValidationWarning
 from aws_lambda_powertools.shared import constants
-from aws_lambda_powertools.shared.functions import resolve_env_var_choice
-from aws_lambda_powertools.shared.types import AnyCallableT
-from aws_lambda_powertools.utilities.typing import LambdaContext
+from aws_lambda_powertools.shared.functions import resolve_env_var_choice, strtobool
+
+if TYPE_CHECKING:
+    from aws_lambda_powertools.shared.types import AnyCallableT
+    from aws_lambda_powertools.utilities.typing import LambdaContext
 
 METRIC_NAME_REGEX = re.compile(r"^[a-zA-Z0-9_.]+$")
 
@@ -51,18 +54,23 @@ class DatadogProvider(BaseProvider):
 
     def __init__(
         self,
-        metric_set: List | None = None,
+        metric_set: list | None = None,
         namespace: str | None = None,
         flush_to_log: bool | None = None,
-        default_tags: Dict[str, Any] | None = None,
+        default_tags: dict[str, Any] | None = None,
+        function_name: str | None = None,
     ):
         self.metric_set = metric_set if metric_set is not None else []
+        self.function_name = function_name
         self.namespace = (
             resolve_env_var_choice(choice=namespace, env=os.getenv(constants.METRICS_NAMESPACE_ENV))
             or DEFAULT_NAMESPACE
         )
         self.default_tags = default_tags or {}
         self.flush_to_log = resolve_env_var_choice(choice=flush_to_log, env=os.getenv(constants.DATADOG_FLUSH_TO_LOG))
+        # When set as env var, the value is a string
+        if isinstance(self.flush_to_log, str):
+            self.flush_to_log = strtobool(self.flush_to_log)
 
     #  adding name,value,timestamp,tags
     def add_metric(
@@ -83,12 +91,8 @@ class DatadogProvider(BaseProvider):
             Value for the metrics
         timestamp: int
             Timestamp in int for the metrics, default = time.time()
-        tags: List[str]
-            In format like List["tag:value","tag2:value2"]
-        args: Any
-            extra args will be dropped for compatibility
-        kwargs: Any
-            extra kwargs will be converted into tags, e.g., add_metrics(sales=sam) -> tags=['sales:sam']
+        tags: list[str]
+            In format like ["tag:value", "tag2:value2"]
 
         Examples
         --------
@@ -101,7 +105,6 @@ class DatadogProvider(BaseProvider):
             >>>     sales='sam'
             >>> )
         """
-
         # validating metric name
         if not self._validate_datadog_metric_name(name):
             docs = "https://docs.datadoghq.com/metrics/custom_metrics/#naming-custom-metrics"
@@ -122,7 +125,7 @@ class DatadogProvider(BaseProvider):
         logger.debug({"details": "Appending metric", "metrics": name})
         self.metric_set.append({"m": name, "v": value, "e": timestamp, "t": tags})
 
-    def serialize_metric_set(self, metrics: List | None = None) -> List:
+    def serialize_metric_set(self, metrics: list | None = None) -> list:
         """Serializes metrics
 
         Example
@@ -135,7 +138,7 @@ class DatadogProvider(BaseProvider):
 
         Returns
         -------
-        List
+        list
             Serialized metrics following Datadog specification
 
         Raises
@@ -150,7 +153,7 @@ class DatadogProvider(BaseProvider):
         if len(metrics) == 0:
             raise SchemaValidationError("Must contain at least one metric.")
 
-        output_list: List = []
+        output_list: list = []
 
         logger.debug({"details": "Serializing metrics", "metrics": metrics})
 
@@ -182,6 +185,7 @@ class DatadogProvider(BaseProvider):
         raise_on_empty_metrics : bool, optional
             raise exception if no metrics are emitted, by default False
         """
+
         if not raise_on_empty_metrics and len(self.metric_set) == 0:
             warnings.warn(
                 "No application metrics to publish. The cold-start metric may be published if enabled. "
@@ -202,7 +206,7 @@ class DatadogProvider(BaseProvider):
                         timestamp=metric_item["e"],
                         tags=metric_item["t"],
                     )
-            else:
+            elif not is_metrics_disabled():
                 # dd module not found: flush to log, this format can be recognized via datadog log forwarder
                 # https://github.com/Datadog/datadog-lambda-python/blob/main/datadog_lambda/metric.py#L77
                 for metric_item in metrics:
@@ -222,8 +226,11 @@ class DatadogProvider(BaseProvider):
         context : Any
             Lambda context
         """
+
+        cold_start_function_name = resolve_cold_start_function_name(function_name=self.function_name, context=context)
+
         logger.debug("Adding cold start metric and function_name tagging")
-        self.add_metric(name="ColdStart", value=1, function_name=context.function_name)
+        self.add_metric(name="ColdStart", value=1, function_name=cold_start_function_name)
 
     def log_metrics(
         self,
@@ -304,7 +311,7 @@ class DatadogProvider(BaseProvider):
         self.default_tags.update(**tags)
 
     @staticmethod
-    def _serialize_datadog_tags(metric_tags: Dict[str, Any], default_tags: Dict[str, Any]) -> List[str]:
+    def _serialize_datadog_tags(metric_tags: dict[str, Any], default_tags: dict[str, Any]) -> list[str]:
         """
         Serialize metric tags into a list of formatted strings for Datadog integration.
 
@@ -313,14 +320,14 @@ class DatadogProvider(BaseProvider):
 
         Parameters
         ----------
-        metric_tags: Dict[str, Any]
+        metric_tags: dict[str, Any]
             A dictionary containing metric-specific tags.
-        default_tags: Dict[str, Any]
+        default_tags: dict[str, Any]
             A dictionary containing default tags applicable to all metrics.
 
         Returns:
         -------
-        List[str]
+        list[str]
             A list of formatted tag strings, each in the "tag_key:tag_value" format.
 
         Example:
@@ -337,7 +344,7 @@ class DatadogProvider(BaseProvider):
         return [f"{tag_key}:{tag_value}" for tag_key, tag_value in tags.items()]
 
     @staticmethod
-    def _validate_datadog_tags_name(tags: Dict):
+    def _validate_datadog_tags_name(tags: dict):
         """
         Validate a metric tag according to specific requirements.
 
@@ -348,7 +355,7 @@ class DatadogProvider(BaseProvider):
 
         Parameters:
         ----------
-        tags: Dict
+        tags: dict
             The metric tags to be validated.
         """
         for tag_key, tag_value in tags.items():

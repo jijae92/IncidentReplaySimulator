@@ -2,8 +2,12 @@
 Idempotency errors
 """
 
+from __future__ import annotations
 
-from typing import Optional, Union
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from aws_lambda_powertools.utilities.idempotency.persistence.datarecord import DataRecord
 
 
 class BaseError(Exception):
@@ -12,7 +16,7 @@ class BaseError(Exception):
     See https://github.com/aws-powertools/powertools-lambda-python/issues/1772
     """
 
-    def __init__(self, *args: Optional[Union[str, Exception]]):
+    def __init__(self, *args: str | Exception | None):
         self.message = str(args[0]) if args else ""
         self.details = "".join(str(arg) for arg in args[1:]) if args[1:] else None
 
@@ -29,6 +33,18 @@ class IdempotencyItemAlreadyExistsError(BaseError):
     """
     Item attempting to be inserted into persistence store already exists and is not expired
     """
+
+    def __init__(self, *args: str | Exception | None, old_data_record: DataRecord | None = None):
+        self.old_data_record = old_data_record
+        super().__init__(*args)
+
+    def __str__(self):
+        """
+        Return all arguments formatted or original message
+        """
+        old_data_record = f" from [{(str(self.old_data_record))}]" if self.old_data_record else ""
+        message = super().__str__()
+        return f"{message}{old_data_record}"
 
 
 class IdempotencyItemNotFoundError(BaseError):
@@ -82,4 +98,22 @@ class IdempotencyModelTypeError(BaseError):
 class IdempotencyNoSerializationModelError(BaseError):
     """
     No model was supplied to the serializer
+    """
+
+
+class IdempotencyPersistenceConfigError(BaseError):
+    """
+    The idempotency persistency configuration was unsupported
+    """
+
+
+class IdempotencyPersistenceConnectionError(BaseError):
+    """
+    Idempotency persistence connection error
+    """
+
+
+class IdempotencyPersistenceConsistencyError(BaseError):
+    """
+    Idempotency persistency consistency error, needs to be removed
     """

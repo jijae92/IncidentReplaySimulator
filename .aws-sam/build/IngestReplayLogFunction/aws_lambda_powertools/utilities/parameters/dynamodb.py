@@ -2,18 +2,20 @@
 Amazon DynamoDB parameter retrieval and caching utility
 """
 
+from __future__ import annotations
 
-from typing import TYPE_CHECKING, Dict, Optional
+import warnings
+from typing import TYPE_CHECKING
 
 import boto3
 from boto3.dynamodb.conditions import Key
-from botocore.config import Config
 
-from .base import BaseProvider
+from aws_lambda_powertools.utilities.parameters.base import BaseProvider
+from aws_lambda_powertools.warnings import PowertoolsDeprecationWarning
 
 if TYPE_CHECKING:
-    from mypy_boto3_dynamodb import DynamoDBServiceResource
-    from mypy_boto3_dynamodb.service_resource import Table
+    from botocore.config import Config
+    from mypy_boto3_dynamodb.service_resource import DynamoDBServiceResource
 
 
 class DynamoDBProvider(BaseProvider):
@@ -155,27 +157,33 @@ class DynamoDBProvider(BaseProvider):
         key_attr: str = "id",
         sort_attr: str = "sk",
         value_attr: str = "value",
-        endpoint_url: Optional[str] = None,
-        config: Optional[Config] = None,
-        boto3_session: Optional[boto3.session.Session] = None,
-        boto3_client: Optional["DynamoDBServiceResource"] = None,
+        endpoint_url: str | None = None,
+        config: Config | None = None,
+        boto_config: Config | None = None,
+        boto3_session: boto3.session.Session | None = None,
+        boto3_client: DynamoDBServiceResource | None = None,
     ):
         """
         Initialize the DynamoDB client
         """
-        self.table: "Table" = self._build_boto3_resource_client(
-            service_name="dynamodb",
-            client=boto3_client,
-            session=boto3_session,
-            config=config,
-            endpoint_url=endpoint_url,
-        ).Table(table_name)
+        if config:
+            warnings.warn(
+                message="The 'config' parameter is deprecated in V3 and will be removed in V4. "
+                "Please use 'boto_config' instead.",
+                category=PowertoolsDeprecationWarning,
+                stacklevel=2,
+            )
 
+        if boto3_client is None:
+            boto3_session = boto3_session or boto3.session.Session()
+            boto3_client = boto3_session.resource("dynamodb", config=boto_config or config, endpoint_url=endpoint_url)
+
+        self.table = boto3_client.Table(table_name)
         self.key_attr = key_attr
         self.sort_attr = sort_attr
         self.value_attr = value_attr
 
-        super().__init__()
+        super().__init__(resource=boto3_client)
 
     def _get(self, name: str, **sdk_options) -> str:
         """
@@ -196,7 +204,7 @@ class DynamoDBProvider(BaseProvider):
         # without a breaking change within ABC return type
         return self.table.get_item(**sdk_options)["Item"][self.value_attr]  # type: ignore[return-value]
 
-    def _get_multiple(self, path: str, **sdk_options) -> Dict[str, str]:
+    def _get_multiple(self, path: str, **sdk_options) -> dict[str, str]:
         """
         Retrieve multiple parameter values from Amazon DynamoDB
 
@@ -222,4 +230,4 @@ class DynamoDBProvider(BaseProvider):
 
         # maintenance: look for better ways to correctly type DynamoDB multiple return types
         # without a breaking change within ABC return type
-        return {item[self.sort_attr]: item[self.value_attr] for item in items}
+        return {item[self.sort_attr]: item[self.value_attr] for item in items}  # type: ignore[misc]

@@ -4,11 +4,16 @@ import base64
 import itertools
 import logging
 import os
+import re
 import warnings
 from binascii import Error as BinAsciiError
-from typing import Any, Dict, Generator, Optional, Union, overload
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, overload
 
 from aws_lambda_powertools.shared import constants
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +35,7 @@ def strtobool(value: str) -> bool:
     raise ValueError(f"invalid truth value {value!r}")
 
 
-def resolve_truthy_env_var_choice(env: str, choice: Optional[bool] = None) -> bool:
+def resolve_truthy_env_var_choice(env: str, choice: bool | None = None) -> bool:
     """Pick explicit choice over truthy env value, if available, otherwise return truthy env value
 
     NOTE: Environment variable should be resolved by the caller.
@@ -50,30 +55,27 @@ def resolve_truthy_env_var_choice(env: str, choice: Optional[bool] = None) -> bo
     return choice if choice is not None else strtobool(env)
 
 
-def resolve_max_age(env: str, choice: Optional[int]) -> int:
+def resolve_max_age(env: str, choice: int | None) -> int:
     """Resolve max age value"""
     return choice if choice is not None else int(env)
 
 
 @overload
-def resolve_env_var_choice(env: Optional[str], choice: float) -> float:
-    ...
+def resolve_env_var_choice(env: str | None, choice: float) -> float: ...
 
 
 @overload
-def resolve_env_var_choice(env: Optional[str], choice: str) -> str:
-    ...
+def resolve_env_var_choice(env: str | None, choice: str) -> str: ...
 
 
 @overload
-def resolve_env_var_choice(env: Optional[str], choice: Optional[str]) -> str:
-    ...
+def resolve_env_var_choice(env: str | None, choice: str | None) -> str: ...
 
 
 def resolve_env_var_choice(
-    env: Optional[str] = None,
-    choice: Optional[Union[str, float]] = None,
-) -> Optional[Union[str, float]]:
+    env: str | None = None,
+    choice: str | float | None = None,
+) -> str | float | None:
     """Pick explicit choice over env, if available, otherwise return env value received
 
     NOTE: Environment variable should be resolved by the caller.
@@ -95,10 +97,18 @@ def resolve_env_var_choice(
 
 def base64_decode(value: str) -> bytes:
     try:
-        logger.debug("Decoding base64 record item before parsing")
+        logger.debug("Decoding base64 item to bytes")
         return base64.b64decode(value)
     except (BinAsciiError, TypeError):
-        raise ValueError("base64 decode failed")
+        raise ValueError("base64 decode failed - is this base64 encoded string?")
+
+
+def bytes_to_base64_string(value: bytes) -> str:
+    try:
+        logger.debug("Encoding bytes to base64 string")
+        return base64.b64encode(value).decode()
+    except TypeError:
+        raise ValueError(f"base64 encoding failed - is this bytes data? type: {type(value)}")
 
 
 def bytes_to_string(value: bytes) -> str:
@@ -129,12 +139,12 @@ def powertools_debug_is_set() -> bool:
     return False
 
 
-def slice_dictionary(data: Dict, chunk_size: int) -> Generator[Dict, None, None]:
-    for _ in range(0, len(data), chunk_size):
-        yield {dict_key: data[dict_key] for dict_key in itertools.islice(data, chunk_size)}
+def slice_dictionary(data: dict, chunk_size: int) -> Generator[dict, None, None]:
+    for i in range(0, len(data), chunk_size):
+        yield {key: data[key] for key in itertools.islice(data, i, i + chunk_size)}
 
 
-def extract_event_from_common_models(data: Any) -> Dict | Any:
+def extract_event_from_common_models(data: Any) -> dict | Any:
     """Extract raw event from common types used in Powertools
 
     If event cannot be extracted, return received data as is.
@@ -250,3 +260,50 @@ def dataclass_to_dict(data) -> dict:
     import dataclasses
 
     return dataclasses.asdict(data)
+
+
+def abs_lambda_path(relative_path: str = "") -> str:
+    """Return the absolute path from the given relative path to lambda handler.
+
+    Parameters
+    ----------
+    relative_path : str, optional
+        The relative path to the lambda handler, by default an empty string.
+
+    Returns
+    -------
+    str
+        The absolute path generated from the given relative path.
+        If the environment variable LAMBDA_TASK_ROOT is set, it will use that value.
+        Otherwise, it will use the current working directory.
+        If the path is empty, it will return the current working directory.
+    """
+    # Retrieve the LAMBDA_TASK_ROOT environment variable or default to an empty string
+    current_working_directory = os.environ.get("LAMBDA_TASK_ROOT", "") or str(Path.cwd())
+
+    return str(Path(current_working_directory, relative_path))
+
+
+def sanitize_xray_segment_name(name: str) -> str:
+    return re.sub(constants.INVALID_XRAY_NAME_CHARACTERS, "", name)
+
+
+def get_tracer_id() -> str | None:
+    xray_trace_id = os.getenv(constants.XRAY_TRACE_ID_ENV)
+    return xray_trace_id.split(";")[0].replace("Root=", "") if xray_trace_id else None
+
+
+def decode_header_bytes(byte_list):
+    """
+    Decode a list of byte values that might be signed.
+    If any negative values exist, handle them as signed bytes.
+    Otherwise use the normal bytes construction.
+    """
+    has_negative = any(b < 0 for b in byte_list)
+
+    if not has_negative:
+        # Use normal bytes construction if all values are positive
+        return bytes(byte_list)
+    # Convert signed bytes to unsigned (0-255 range)
+    unsigned_bytes = [(b & 0xFF) for b in byte_list]
+    return bytes(unsigned_bytes)

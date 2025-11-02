@@ -1,14 +1,27 @@
-from re import Match
-from typing import Any, Dict
+from __future__ import annotations
+
+import json
+from typing import TYPE_CHECKING, Any
 
 from typing_extensions import override
 
 from aws_lambda_powertools.event_handler import ApiGatewayResolver
 from aws_lambda_powertools.event_handler.api_gateway import (
+    _DEFAULT_OPENAPI_RESPONSE_DESCRIPTION,
+    BedrockResponse,
     ProxyEventType,
     ResponseBuilder,
 )
-from aws_lambda_powertools.utilities.data_classes import BedrockAgentEvent
+from aws_lambda_powertools.event_handler.openapi.constants import DEFAULT_API_VERSION, DEFAULT_OPENAPI_VERSION
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from http import HTTPStatus
+    from re import Match
+
+    from aws_lambda_powertools.event_handler.openapi.models import Contact, License, SecurityScheme, Server, Tag
+    from aws_lambda_powertools.event_handler.openapi.types import OpenAPIResponse
+    from aws_lambda_powertools.utilities.data_classes import BedrockAgentEvent
 
 
 class BedrockResponseBuilder(ResponseBuilder):
@@ -19,15 +32,12 @@ class BedrockResponseBuilder(ResponseBuilder):
     """
 
     @override
-    def build(self, event: BedrockAgentEvent, *args) -> Dict[str, Any]:
-        """Build the full response dict to be returned by the lambda"""
-        self._route(event, None)
-
+    def build(self, event: BedrockAgentEvent, *args) -> dict[str, Any]:
         body = self.response.body
         if self.response.is_json() and not isinstance(self.response.body, str):
             body = self.serializer(self.response.body)
 
-        return {
+        response = {
             "messageVersion": "1.0",
             "response": {
                 "actionGroup": event.action_group,
@@ -41,6 +51,19 @@ class BedrockResponseBuilder(ResponseBuilder):
                 },
             },
         }
+
+        # Add Bedrock-specific attributes
+        if isinstance(self.response, BedrockResponse):
+            if self.response.session_attributes:
+                response["sessionAttributes"] = self.response.session_attributes
+
+            if self.response.prompt_session_attributes:
+                response["promptSessionAttributes"] = self.response.prompt_session_attributes
+
+            if self.response.knowledge_bases_configuration:
+                response["knowledgeBasesConfiguration"] = self.response.knowledge_bases_configuration
+
+        return response
 
 
 class BedrockAgentResolver(ApiGatewayResolver):
@@ -66,6 +89,8 @@ class BedrockAgentResolver(ApiGatewayResolver):
     @tracer.capture_lambda_handler
     def lambda_handler(event, context):
         return app.resolve(event, context)
+    ```
+
     """
 
     current_event: BedrockAgentEvent
@@ -78,14 +103,321 @@ class BedrockAgentResolver(ApiGatewayResolver):
             serializer=None,
             strip_prefixes=None,
             enable_validation=enable_validation,
+            json_body_deserializer=None,
         )
         self._response_builder_class = BedrockResponseBuilder
 
+    # Note: we need ignore[override] because we are making the optional `description` field required.
     @override
-    def _convert_matches_into_route_keys(self, match: Match) -> Dict[str, str]:
+    def get(  # type: ignore[override]
+        self,
+        rule: str,
+        description: str,
+        cors: bool | None = None,
+        compress: bool = False,
+        cache_control: str | None = None,
+        summary: str | None = None,
+        responses: dict[int, OpenAPIResponse] | None = None,
+        response_description: str = _DEFAULT_OPENAPI_RESPONSE_DESCRIPTION,
+        tags: list[str] | None = None,
+        operation_id: str | None = None,
+        include_in_schema: bool = True,
+        openapi_extensions: dict[str, Any] | None = None,
+        deprecated: bool = False,
+        custom_response_validation_http_code: int | HTTPStatus | None = None,
+        middlewares: list[Callable[..., Any]] | None = None,
+    ) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
+        security = None
+
+        return super().get(
+            rule,
+            cors,
+            compress,
+            cache_control,
+            summary,
+            description,
+            responses,
+            response_description,
+            tags,
+            operation_id,
+            include_in_schema,
+            security,
+            openapi_extensions,
+            deprecated,
+            custom_response_validation_http_code,
+            middlewares,
+        )
+
+    # Note: we need ignore[override] because we are making the optional `description` field required.
+    @override
+    def post(  # type: ignore[override]
+        self,
+        rule: str,
+        description: str,
+        cors: bool | None = None,
+        compress: bool = False,
+        cache_control: str | None = None,
+        summary: str | None = None,
+        responses: dict[int, OpenAPIResponse] | None = None,
+        response_description: str = _DEFAULT_OPENAPI_RESPONSE_DESCRIPTION,
+        tags: list[str] | None = None,
+        operation_id: str | None = None,
+        include_in_schema: bool = True,
+        openapi_extensions: dict[str, Any] | None = None,
+        deprecated: bool = False,
+        custom_response_validation_http_code: int | HTTPStatus | None = None,
+        middlewares: list[Callable[..., Any]] | None = None,
+    ):
+        security = None
+
+        return super().post(
+            rule,
+            cors,
+            compress,
+            cache_control,
+            summary,
+            description,
+            responses,
+            response_description,
+            tags,
+            operation_id,
+            include_in_schema,
+            security,
+            openapi_extensions,
+            deprecated,
+            custom_response_validation_http_code,
+            middlewares,
+        )
+
+    # Note: we need ignore[override] because we are making the optional `description` field required.
+    @override
+    def put(  # type: ignore[override]
+        self,
+        rule: str,
+        description: str,
+        cors: bool | None = None,
+        compress: bool = False,
+        cache_control: str | None = None,
+        summary: str | None = None,
+        responses: dict[int, OpenAPIResponse] | None = None,
+        response_description: str = _DEFAULT_OPENAPI_RESPONSE_DESCRIPTION,
+        tags: list[str] | None = None,
+        operation_id: str | None = None,
+        include_in_schema: bool = True,
+        openapi_extensions: dict[str, Any] | None = None,
+        deprecated: bool = False,
+        custom_response_validation_http_code: int | HTTPStatus | None = None,
+        middlewares: list[Callable[..., Any]] | None = None,
+    ):
+        security = None
+
+        return super().put(
+            rule,
+            cors,
+            compress,
+            cache_control,
+            summary,
+            description,
+            responses,
+            response_description,
+            tags,
+            operation_id,
+            include_in_schema,
+            security,
+            openapi_extensions,
+            deprecated,
+            custom_response_validation_http_code,
+            middlewares,
+        )
+
+    # Note: we need ignore[override] because we are making the optional `description` field required.
+    @override
+    def patch(  # type: ignore[override]
+        self,
+        rule: str,
+        description: str,
+        cors: bool | None = None,
+        compress: bool = False,
+        cache_control: str | None = None,
+        summary: str | None = None,
+        responses: dict[int, OpenAPIResponse] | None = None,
+        response_description: str = _DEFAULT_OPENAPI_RESPONSE_DESCRIPTION,
+        tags: list[str] | None = None,
+        operation_id: str | None = None,
+        include_in_schema: bool = True,
+        openapi_extensions: dict[str, Any] | None = None,
+        deprecated: bool = False,
+        custom_response_validation_http_code: int | HTTPStatus | None = None,
+        middlewares: list[Callable] | None = None,
+    ):
+        security = None
+
+        return super().patch(
+            rule,
+            cors,
+            compress,
+            cache_control,
+            summary,
+            description,
+            responses,
+            response_description,
+            tags,
+            operation_id,
+            include_in_schema,
+            security,
+            openapi_extensions,
+            deprecated,
+            custom_response_validation_http_code,
+            middlewares,
+        )
+
+    # Note: we need ignore[override] because we are making the optional `description` field required.
+    @override
+    def delete(  # type: ignore[override]
+        self,
+        rule: str,
+        description: str,
+        cors: bool | None = None,
+        compress: bool = False,
+        cache_control: str | None = None,
+        summary: str | None = None,
+        responses: dict[int, OpenAPIResponse] | None = None,
+        response_description: str = _DEFAULT_OPENAPI_RESPONSE_DESCRIPTION,
+        tags: list[str] | None = None,
+        operation_id: str | None = None,
+        include_in_schema: bool = True,
+        openapi_extensions: dict[str, Any] | None = None,
+        deprecated: bool = False,
+        custom_response_validation_http_code: int | HTTPStatus | None = None,
+        middlewares: list[Callable[..., Any]] | None = None,
+    ):
+        security = None
+
+        return super().delete(
+            rule,
+            cors,
+            compress,
+            cache_control,
+            summary,
+            description,
+            responses,
+            response_description,
+            tags,
+            operation_id,
+            include_in_schema,
+            security,
+            openapi_extensions,
+            deprecated,
+            custom_response_validation_http_code,
+            middlewares,
+        )
+
+    @override
+    def _convert_matches_into_route_keys(self, match: Match) -> dict[str, str]:
         # In Bedrock Agents, all the parameters come inside the "parameters" key, not on the apiPath
         # So we have to search for route parameters in the parameters key
-        parameters: Dict[str, str] = {}
+        parameters: dict[str, str] = {}
         if match.groupdict() and self.current_event.parameters:
             parameters = {parameter["name"]: parameter["value"] for parameter in self.current_event.parameters}
         return parameters
+
+    @override
+    def get_openapi_json_schema(  # type: ignore[override]
+        self,
+        *,
+        title: str = "Powertools API",
+        version: str = DEFAULT_API_VERSION,
+        openapi_version: str = DEFAULT_OPENAPI_VERSION,
+        summary: str | None = None,
+        description: str | None = None,
+        tags: list[Tag | str] | None = None,
+        servers: list[Server] | None = None,
+        terms_of_service: str | None = None,
+        contact: Contact | None = None,
+        license_info: License | None = None,
+        security_schemes: dict[str, SecurityScheme] | None = None,
+        security: list[dict[str, list[str]]] | None = None,
+        openapi_extensions: dict[str, Any] | None = None,
+    ) -> str:
+        """
+        Returns the OpenAPI schema as a JSON serializable dict.
+        Since Bedrock Agents only support OpenAPI 3.0.0, we convert OpenAPI 3.1.0 schemas
+        and enforce 3.0.0 compatibility for seamless integration.
+
+        Parameters
+        ----------
+        title: str
+            The title of the application.
+        version: str
+            The version of the OpenAPI document (which is distinct from the OpenAPI Specification version or the API
+        openapi_version: str, default = "3.0.0"
+            The version of the OpenAPI Specification (which the document uses).
+        summary: str, optional
+            A short summary of what the application does.
+        description: str, optional
+            A verbose explanation of the application behavior.
+        tags: list[Tag, str], optional
+            A list of tags used by the specification with additional metadata.
+        servers: list[Server], optional
+            An array of Server Objects, which provide connectivity information to a target server.
+        terms_of_service: str, optional
+            A URL to the Terms of Service for the API. MUST be in the format of a URL.
+        contact: Contact, optional
+            The contact information for the exposed API.
+        license_info: License, optional
+            The license information for the exposed API.
+        security_schemes: dict[str, SecurityScheme]], optional
+            A declaration of the security schemes available to be used in the specification.
+        security: list[dict[str, list[str]]], optional
+            A declaration of which security mechanisms are applied globally across the API.
+
+        Returns
+        -------
+        str
+            The OpenAPI schema as a JSON serializable dict.
+        """
+        from aws_lambda_powertools.event_handler.openapi.compat import model_json
+
+        schema = super().get_openapi_schema(
+            title=title,
+            version=version,
+            openapi_version=openapi_version,
+            summary=summary,
+            description=description,
+            tags=tags,
+            servers=servers,
+            terms_of_service=terms_of_service,
+            contact=contact,
+            license_info=license_info,
+            security_schemes=security_schemes,
+            security=security,
+            openapi_extensions=openapi_extensions,
+        )
+        schema.openapi = "3.0.3"
+
+        # Transform OpenAPI 3.1 into 3.0
+        def inner(yaml_dict):
+            if isinstance(yaml_dict, dict):
+                if "anyOf" in yaml_dict and isinstance((anyOf := yaml_dict["anyOf"]), list):
+                    for i, item in enumerate(anyOf):
+                        if isinstance(item, dict) and item.get("type") == "null":
+                            anyOf.pop(i)
+                            yaml_dict["nullable"] = True
+                for value in yaml_dict.values():
+                    inner(value)
+            elif isinstance(yaml_dict, list):
+                for item in yaml_dict:
+                    inner(item)
+
+        model = json.loads(
+            model_json(
+                schema,
+                by_alias=True,
+                exclude_none=True,
+                indent=2,
+            ),
+        )
+
+        inner(model)
+
+        return json.dumps(model)

@@ -1,15 +1,24 @@
-from aws_lambda_powertools.utilities.parser.compat import disable_pydantic_v2_warning
-
-disable_pydantic_v2_warning()
-
 from .alb import AlbModel, AlbRequestContext, AlbRequestContextData
 from .apigw import (
+    ApiGatewayAuthorizerRequest,
+    ApiGatewayAuthorizerToken,
     APIGatewayEventAuthorizer,
     APIGatewayEventIdentity,
     APIGatewayEventRequestContext,
     APIGatewayProxyEventModel,
 )
+from .apigw_websocket import (
+    APIGatewayWebSocketConnectEventModel,
+    APIGatewayWebSocketConnectEventRequestContext,
+    APIGatewayWebSocketDisconnectEventModel,
+    APIGatewayWebSocketDisconnectEventRequestContext,
+    APIGatewayWebSocketEventIdentity,
+    APIGatewayWebSocketEventRequestContextBase,
+    APIGatewayWebSocketMessageEventModel,
+    APIGatewayWebSocketMessageEventRequestContext,
+)
 from .apigwv2 import (
+    ApiGatewayAuthorizerRequestV2,
     APIGatewayProxyEventV2Model,
     RequestContextV2,
     RequestContextV2Authorizer,
@@ -18,8 +27,11 @@ from .apigwv2 import (
     RequestContextV2AuthorizerJwt,
     RequestContextV2Http,
 )
+from .appsync import AppSyncResolverEventModel
+from .appsync_events import AppSyncEventsModel
 from .bedrock_agent import (
     BedrockAgentEventModel,
+    BedrockAgentFunctionEventModel,
     BedrockAgentModel,
     BedrockAgentPropertyModel,
     BedrockAgentRequestBodyModel,
@@ -36,6 +48,21 @@ from .cloudwatch import (
     CloudWatchLogsDecode,
     CloudWatchLogsLogEvent,
     CloudWatchLogsModel,
+)
+from .cognito import (
+    CognitoCreateAuthChallengeTriggerModel,
+    CognitoCustomEmailSenderTriggerModel,
+    CognitoCustomMessageTriggerModel,
+    CognitoCustomSMSSenderTriggerModel,
+    CognitoDefineAuthChallengeTriggerModel,
+    CognitoMigrateUserTriggerModel,
+    CognitoPostAuthenticationTriggerModel,
+    CognitoPostConfirmationTriggerModel,
+    CognitoPreAuthenticationTriggerModel,
+    CognitoPreSignupTriggerModel,
+    CognitoPreTokenGenerationTriggerModelV1,
+    CognitoPreTokenGenerationTriggerModelV2AndV3,
+    CognitoVerifyAuthChallengeTriggerModel,
 )
 from .dynamodb import (
     DynamoDBStreamChangedRecordModel,
@@ -68,6 +95,11 @@ from .s3 import (
     S3Model,
     S3RecordModel,
 )
+from .s3_batch_operation import (
+    S3BatchOperationJobModel,
+    S3BatchOperationModel,
+    S3BatchOperationTaskModel,
+)
 from .s3_event_notification import (
     S3SqsEventNotificationModel,
     S3SqsEventNotificationRecordModel,
@@ -95,11 +127,21 @@ from .ses import (
 )
 from .sns import SnsModel, SnsNotificationModel, SnsRecordModel
 from .sqs import SqsAttributesModel, SqsModel, SqsMsgAttributeModel, SqsRecordModel
+from .transfer_family import TransferFamilyAuthorizer
 from .vpc_lattice import VpcLatticeModel
 from .vpc_latticev2 import VpcLatticeV2Model
 
 __all__ = [
     "APIGatewayProxyEventV2Model",
+    "ApiGatewayAuthorizerRequestV2",
+    "APIGatewayWebSocketEventIdentity",
+    "APIGatewayWebSocketMessageEventModel",
+    "APIGatewayWebSocketMessageEventRequestContext",
+    "APIGatewayWebSocketConnectEventModel",
+    "APIGatewayWebSocketConnectEventRequestContext",
+    "APIGatewayWebSocketDisconnectEventRequestContext",
+    "APIGatewayWebSocketDisconnectEventModel",
+    "APIGatewayWebSocketEventRequestContextBase",
     "RequestContextV2",
     "RequestContextV2Http",
     "RequestContextV2Authorizer",
@@ -110,9 +152,24 @@ __all__ = [
     "CloudWatchLogsDecode",
     "CloudWatchLogsLogEvent",
     "CloudWatchLogsModel",
+    "CognitoPreSignupTriggerModel",
+    "CognitoPostConfirmationTriggerModel",
+    "CognitoPreAuthenticationTriggerModel",
+    "CognitoPostAuthenticationTriggerModel",
+    "CognitoMigrateUserTriggerModel",
+    "CognitoCustomMessageTriggerModel",
+    "CognitoCustomEmailSenderTriggerModel",
+    "CognitoCustomSMSSenderTriggerModel",
+    "CognitoDefineAuthChallengeTriggerModel",
+    "CognitoCreateAuthChallengeTriggerModel",
+    "CognitoVerifyAuthChallengeTriggerModel",
+    "CognitoPreTokenGenerationTriggerModelV1",
+    "CognitoPreTokenGenerationTriggerModelV2AndV3",
     "AlbModel",
     "AlbRequestContext",
     "AlbRequestContextData",
+    "AppSyncResolverEventModel",
+    "AppSyncEventsModel",
     "DynamoDBStreamModel",
     "EventBridgeModel",
     "DynamoDBStreamChangedRecordModel",
@@ -156,10 +213,13 @@ __all__ = [
     "SqsAttributesModel",
     "S3SqsEventNotificationModel",
     "S3SqsEventNotificationRecordModel",
+    "TransferFamilyAuthorizer",
     "APIGatewayProxyEventModel",
     "APIGatewayEventRequestContext",
     "APIGatewayEventAuthorizer",
     "APIGatewayEventIdentity",
+    "ApiGatewayAuthorizerRequest",
+    "ApiGatewayAuthorizerToken",
     "KafkaSelfManagedEventModel",
     "KafkaRecordModel",
     "KafkaMskEventModel",
@@ -177,4 +237,8 @@ __all__ = [
     "BedrockAgentEventModel",
     "BedrockAgentRequestBodyModel",
     "BedrockAgentRequestMediaModel",
+    "BedrockAgentFunctionEventModel",
+    "S3BatchOperationJobModel",
+    "S3BatchOperationModel",
+    "S3BatchOperationTaskModel",
 ]

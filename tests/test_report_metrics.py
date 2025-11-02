@@ -31,18 +31,21 @@ def aws_credentials():
     os.environ["AWS_DEFAULT_REGION"] = TEST_REGION
 
 @pytest.fixture(scope="function")
-def s3_client_mock(aws_credentials):
+def aws_mocks(aws_credentials):
     with mock_aws():
-        client = boto3.client("s3", region_name=TEST_REGION)
-        client.create_bucket(Bucket=TEST_ATHENA_RESULTS_BUCKET, CreateBucketConfiguration={'LocationConstraint': TEST_REGION})
-        yield client
+        yield
 
 @pytest.fixture(scope="function")
-def sns_client_mock(aws_credentials):
-    with mock_aws():
-        client = boto3.client("sns", region_name=TEST_REGION)
-        client.create_topic(Name=TEST_SNS_TOPIC_NAME)
-        yield client
+def s3_client_mock(aws_mocks):
+    client = boto3.client("s3", region_name=TEST_REGION)
+    client.create_bucket(Bucket=TEST_ATHENA_RESULTS_BUCKET, CreateBucketConfiguration={'LocationConstraint': TEST_REGION})
+    return client
+
+@pytest.fixture(scope="function")
+def sns_client_mock(aws_mocks):
+    client = boto3.client("sns", region_name=TEST_REGION)
+    client.create_topic(Name=TEST_SNS_TOPIC_NAME)
+    return client
 
 @pytest.fixture
 def reload_modules_and_patch(monkeypatch, s3_client_mock, sns_client_mock):
@@ -54,10 +57,16 @@ def reload_modules_and_patch(monkeypatch, s3_client_mock, sns_client_mock):
     importlib.reload(common_config)
     importlib.reload(reporter_handler)
 
-    # Patch the clients in the reloaded handler module
-    with patch("src.reporter.handler.sns_client.sns", sns_client_mock):
-        with patch("src.reporter.handler.s3_client.s3", s3_client_mock):
-            yield
+    def mock_boto3_client(service_name, *args, **kwargs):
+        if service_name == 'sns':
+            return sns_client_mock
+        if service_name == 's3':
+            return s3_client_mock
+        # Fallback to the real boto3.client for other services
+        return boto3.client(service_name, *args, **kwargs)
+
+    with patch("boto3.client", side_effect=mock_boto3_client):
+        yield
 
 @pytest.fixture
 def sample_metrics_data():

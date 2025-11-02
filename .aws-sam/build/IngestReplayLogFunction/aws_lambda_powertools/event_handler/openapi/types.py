@@ -1,14 +1,20 @@
+from __future__ import annotations
+
 import types
-from enum import Enum
-from typing import TYPE_CHECKING, Any, Callable, Dict, Optional, Set, Type, Union
+from typing import TYPE_CHECKING, Any, Dict, Set, Type, TypedDict, Union
 
 if TYPE_CHECKING:
-    from pydantic import BaseModel  # noqa: F401
+    from collections.abc import Callable
+    from enum import Enum
 
-CacheKey = Optional[Callable[..., Any]]
-IncEx = Union[Set[int], Set[str], Dict[int, Any], Dict[str, Any]]
-ModelNameMap = Dict[Union[Type["BaseModel"], Type[Enum]], str]
-TypeModelOrEnum = Union[Type["BaseModel"], Type[Enum]]
+    from pydantic import BaseModel
+    from typing_extensions import NotRequired
+
+    CacheKey = Union[Callable[..., Any], None]
+    IncEx = Union[Set[int], Set[str], Dict[int, Any], Dict[str, Any]]
+    TypeModelOrEnum = Union[Type[BaseModel], Type[Enum]]
+    ModelNameMap = Dict[TypeModelOrEnum, str]
+
 UnionType = getattr(types, "UnionType", Union)
 
 
@@ -26,7 +32,7 @@ validation_error_definition = {
             "type": "array",
             "items": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
         },
-        "msg": {"title": "Message", "type": "string"},
+        # For security reasons, we hide **msg** details (don't leak Python, Pydantic or filenames)
         "type": {"title": "Error Type", "type": "string"},
     },
     "required": ["loc", "msg", "type"],
@@ -39,7 +45,50 @@ validation_error_response_definition = {
         "detail": {
             "title": "Detail",
             "type": "array",
-            "items": {"$ref": COMPONENT_REF_PREFIX + "ValidationError"},
+            "items": {"$ref": f"{COMPONENT_REF_PREFIX}ValidationError"},
         },
     },
 }
+
+response_validation_error_response_definition = {
+    "title": "ResponseValidationError",
+    "type": "object",
+    "properties": {
+        "detail": {
+            "title": "Detail",
+            "type": "array",
+            "items": {"$ref": f"{COMPONENT_REF_PREFIX}ValidationError"},
+        },
+    },
+}
+
+
+class OpenAPIResponseHeader(TypedDict, total=False):
+    """OpenAPI Response Header Object"""
+
+    description: NotRequired[str]
+    schema: NotRequired[dict[str, Any]]
+    examples: NotRequired[dict[str, Any]]
+    style: NotRequired[str]
+    explode: NotRequired[bool]
+    allowReserved: NotRequired[bool]
+    deprecated: NotRequired[bool]
+
+
+class OpenAPIResponseContentSchema(TypedDict, total=False):
+    schema: dict
+    examples: NotRequired[dict[str, Any]]
+    encoding: NotRequired[dict[str, Any]]
+
+
+class OpenAPIResponseContentModel(TypedDict, total=False):
+    model: Any
+    examples: NotRequired[dict[str, Any]]
+    encoding: NotRequired[dict[str, Any]]
+
+
+class OpenAPIResponse(TypedDict, total=False):
+    description: str  # Still required
+    headers: NotRequired[dict[str, OpenAPIResponseHeader]]
+    content: NotRequired[dict[str, OpenAPIResponseContentSchema | OpenAPIResponseContentModel]]
+    links: NotRequired[dict[str, Any]]
