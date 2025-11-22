@@ -1,0 +1,8 @@
+version = 0.1
+
+[default.local.invoke.parameters]
+region = "ap-northeast-2"
+profile = "myprofile"
+event = "/tmp/replay.event.json"
+env-vars = "env/replay_orchestrator.json"
+debug = true

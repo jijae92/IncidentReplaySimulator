@@ -1,0 +1,213 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Incident Replay Simulator - SAM Template.
+  This template defines the AWS resources for the Incident Replay Simulator.
+  It supports two modes: creating new resources or using existing ones.
+
+Parameters:
+  UseExistingResources:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: "Set to 'true' to use existing resources instead of creating new ones."
+
+  # Parameters for creating new resources
+  ReplayBucketName:
+    Type: String
+    Default: ""
+    Description: "(Create Mode) Optional: Specify a name for the replay S3 bucket. If empty, a unique name is generated."
+  ResultsBucketName:
+    Type: String
+    Default: ""
+    Description: "(Create Mode) Optional: Specify a name for the Athena results S3 bucket. If empty, a unique name is generated."
+  GlueDatabasePrefix:
+    Type: String
+    Default: "irsdb"
+    Description: "(Create Mode) Prefix for the Glue Database name to ensure uniqueness."
+  AthenaWorkGroupPrefix:
+    Type: String
+    Default: "irswg"
+    Description: "(Create Mode) Prefix for the Athena WorkGroup name."
+
+  # Parameters for using existing resources
+  ExistingReplayBucketName:
+    Type: String
+    Default: ""
+    Description: "(Existing Mode) The name of the existing S3 bucket for replay logs."
+  ExistingResultsBucketName:
+    Type: String
+    Default: ""
+    Description: "(Existing Mode) The name of the existing S3 bucket for Athena results."
+  ExistingGlueDatabaseName:
+    Type: String
+    Default: ""
+    Description: "(Existing Mode) The name of the existing Glue Database."
+  ExistingAthenaWorkGroupName:
+    Type: String
+    Default: ""
+    Description: "(Existing Mode) The name of the existing Athena WorkGroup."
+
+  NotificationEmail:
+    Type: String
+    Description: Optional email address for SNS notifications.
+    Default: ""
+
+Conditions:
+  CreateResources: !Equals [!Ref UseExistingResources, "false"]
+  UseAutoReplayBucket: !Equals [!Ref ReplayBucketName, ""]
+  UseAutoResultsBucket: !Equals [!Ref ResultsBucketName, ""]
+  HasNotificationEmail: !Not [!Equals [!Ref NotificationEmail, ""]]
+
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 128
+    Runtime: python3.11
+    Architectures:
+      - x86_64
+    Tracing: Active
+    Environment:
+      Variables:
+        BUCKET_REPLAY: !If [CreateResources, !If [UseAutoReplayBucket, !Ref ReplayBucket, !Ref ReplayBucketName], !Ref ExistingReplayBucketName]
+        ATHENA_RESULTS_BUCKET: !If [CreateResources, !If [UseAutoResultsBucket, !Ref ResultsBucket, !Ref ResultsBucketName], !Ref ExistingResultsBucketName]
+        GLUE_DATABASE_NAME: !If [CreateResources, !Sub "${GlueDatabasePrefix}-${AWS::AccountId}-${AWS::Region}", !Ref ExistingGlueDatabaseName]
+        ATHENA_WORK_GROUP_NAME: !If [CreateResources, !Sub "${AthenaWorkGroupPrefix}-${AWS::AccountId}-${AWS::Region}", !Ref ExistingAthenaWorkGroupName]
+        NOTIFICATION_SNS_TOPIC_ARN: !Ref NotificationSnsTopic
+
+Resources:
+  # Conditionally created resources
+  ReplayBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateResources
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !If [UseAutoReplayBucket, !Ref "AWS::NoValue", !Ref ReplayBucketName]
+      VersioningConfiguration: { Status: Enabled }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      Tags: [{Key: Project, Value: IncidentReplaySimulator}]
+
+  ResultsBucket:
+    Type: AWS::S3::Bucket
+    Condition: CreateResources
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !If [UseAutoResultsBucket, !Ref "AWS::NoValue", !Ref ResultsBucketName]
+      VersioningConfiguration: { Status: Enabled }
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault: { SSEAlgorithm: AES256 }
+      LifecycleConfiguration:
+        Rules: [{Id: AthenaResultsLifecycleRule, Status: Enabled, Prefix: athena/results/, ExpirationInDays: 30}]
+      Tags: [{Key: Project, Value: IncidentReplaySimulator}]
+
+  IrsGlueDatabase:
+    Type: AWS::Glue::Database
+    Condition: CreateResources
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      CatalogId: !Ref AWS::AccountId
+      DatabaseInput:
+        Name: !Sub "${GlueDatabasePrefix}-${AWS::AccountId}-${AWS::Region}"
+
+  IrsAthenaWorkGroup:
+    Type: AWS::Athena::WorkGroup
+    Condition: CreateResources
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      Name: !Sub "${AthenaWorkGroupPrefix}-${AWS::AccountId}-${AWS::Region}"
+      State: ENABLED
+      WorkGroupConfiguration:
+        ResultConfiguration:
+          OutputLocation: !If [CreateResources, !Sub "s3://${ResultsBucket}/athena/results/", !Sub "s3://${ExistingResultsBucketName}/athena/results/"]
+          EncryptionConfiguration: { EncryptionOption: SSE_S3 }
+        EnforceWorkGroupConfiguration: true
+      Tags: [{Key: Project, Value: IncidentReplaySimulator}]
+
+  # Always created resources
+  NotificationSnsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: irs-notifications-topic
+      Tags: [{Key: Project, Value: IncidentReplaySimulator}]
+
+  NotificationEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      Endpoint: !Ref NotificationEmail
+      TopicArn: !Ref NotificationSnsTopic
+    Condition: HasNotificationEmail
+
+  # Lambda Functions
+  IngestReplayLogFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: ingest_replay_log_handler.lambda_handler
+      CodeUri: src/
+    Metadata:
+      BuildProperties:
+        BuildMethod: python3.11
+        Manifest: src/requirements.txt
+
+  ReplayOrchestratorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: replay_orchestrator_handler.lambda_handler
+      CodeUri: src/
+    Metadata:
+      BuildProperties:
+        BuildMethod: python3.11
+        Manifest: src/requirements.txt
+
+  DetectorAdapterStubFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: detector_adapter_stub_handler.lambda_handler
+      CodeUri: src/
+    Metadata:
+      BuildProperties:
+        BuildMethod: python3.11
+        Manifest: src/requirements.txt
+
+  ReporterFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: reporter_handler.lambda_handler
+      CodeUri: src/
+    Metadata:
+      BuildProperties:
+        BuildMethod: python3.11
+        Manifest: src/requirements.txt
+Outputs:
+  ReplayBucketNameOut:
+    Description: "S3 Bucket for CloudTrail Replay Logs"
+    Value: !If [CreateResources, !If [UseAutoReplayBucket, !Ref ReplayBucket, !Ref ReplayBucketName], !Ref ExistingReplayBucketName]
+  ResultsBucketNameOut:
+    Description: "S3 Bucket for Athena Query Results and Metrics"
+    Value: !If [CreateResources, !If [UseAutoResultsBucket, !Ref ResultsBucket, !Ref ResultsBucketName], !Ref ExistingResultsBucketName]
+  GlueDatabaseNameOut:
+    Description: "Glue Database Name"
+    Value: !If [CreateResources, !Sub "${GlueDatabasePrefix}-${AWS::StackName}-${AWS::Region}", !Ref ExistingGlueDatabaseName]
+  AthenaWorkGroupNameOut:
+    Description: "Athena WorkGroup Name"
+    Value: !If [CreateResources, !Sub "${AthenaWorkGroupPrefix}-${AWS::StackName}-${AWS::AccountId}-${AWS::Region}", !Ref ExistingAthenaWorkGroupName]
+  NotificationSnsTopicArn:
+    Description: "SNS Topic ARN for Notifications"
+    Value: !Ref NotificationSnsTopic
